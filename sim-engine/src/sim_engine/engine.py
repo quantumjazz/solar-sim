@@ -41,6 +41,8 @@ from sim_engine.reports import (
     BalanceSheetReport,
     CashFlowStatement,
     ExecutiveSummary,
+    IndustryCompanyLine,
+    IndustryReport,
     MarketLine,
     MarketReport,
     ProfitLossStatement,
@@ -53,6 +55,7 @@ from sim_engine.scenario import (
     PurchaseTier,
     ScenarioPack,
 )
+from sim_engine.validation import InvalidDecisionError, validate_decision
 from sim_engine.state import (
     BalanceSheet,
     CompanyState,
@@ -140,6 +143,16 @@ def run_period(
                 f"Have decisions for: {list(decisions.keys())}"
             )
 
+    # Validate every decision against hard constraints; reject the whole
+    # period if any team's decision is invalid (never silently clamp).
+    errors_by_team: Dict[str, List[str]] = {}
+    for company in state.companies:
+        errs = validate_decision(decisions[company.id], company, ctx)
+        if errs:
+            errors_by_team[company.id] = errs
+    if errors_by_team:
+        raise InvalidDecisionError(errors_by_team)
+
     # ---- Phase 1: pre-market per company ----------------------------------
     mid_companies: Dict[str, CompanyState] = {}
     scratches: Dict[str, _PeriodScratch] = {}
@@ -182,6 +195,11 @@ def run_period(
         new_companies.append(after)
         reports[company.id] = bundle
 
+    # ---- Industry report: the cohort-public competitor view ---------------
+    industry = _build_industry_report(reports, next_period)
+    for bundle in reports.values():
+        bundle.industry = industry
+
     new_state = PeriodState(
         period_index=next_period,
         scenario_id=state.scenario_id,
@@ -191,6 +209,50 @@ def run_period(
         companies=new_companies,
     )
     return new_state, reports
+
+
+def _build_industry_report(
+    reports: Dict[str, ReportBundle], period: int
+) -> IndustryReport:
+    """Aggregate per-team reports into the cohort-public industry report."""
+    total_units = sum(r.market.total_units_sold for r in reports.values())
+    total_revenue = sum(r.profit_and_loss.sales_revenue for r in reports.values())
+
+    lines: List[IndustryCompanyLine] = []
+    for cid, r in reports.items():
+        pl = r.profit_and_loss
+        bs = r.balance_sheet
+        units = r.market.total_units_sold
+        lines.append(
+            IndustryCompanyLine(
+                company_id=cid,
+                company_name=r.executive_summary.company_name,
+                revenue=pl.sales_revenue,
+                operating_income=pl.operating_income,
+                net_income=pl.net_income,
+                total_assets=bs.total_assets,
+                equity=(
+                    bs.subscribed_capital
+                    + bs.capital_reserves
+                    + bs.retained_earnings
+                    + bs.net_income_for_period
+                ),
+                total_debt=bs.long_term_loan + bs.short_term_loan + bs.overdraft_loan,
+                cash=bs.cash,
+                units_sold=units,
+                market_share_pct=(
+                    100.0 * units / total_units if total_units > 0 else 0.0
+                ),
+                share_price=r.executive_summary.share_price,
+            )
+        )
+
+    return IndustryReport(
+        period=period,
+        companies=lines,
+        market_total_units=total_units,
+        market_total_revenue=total_revenue,
+    )
 
 
 # ---------------------------------------------------------------------------

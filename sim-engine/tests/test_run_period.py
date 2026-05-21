@@ -539,6 +539,99 @@ def test_market_2_opens_in_period_3_with_fx(pack):
     assert reports["c1"].cash_flow.articulates
 
 
+def test_invalid_decision_rejected(state_0, pack):
+    """A decision with a non-positive price is rejected, not silently run."""
+    from sim_engine.validation import InvalidDecisionError
+
+    decision = _build_decision(
+        team_id="c1", period=1,
+        price=0,  # invalid — price must be positive
+        advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=2_500_000, value_analysis_spend=1_000_000,
+        order_units=30_000, target_volume=40_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=30_000_000, dividend=0,
+    )
+    with pytest.raises(InvalidDecisionError) as excinfo:
+        run_period(state_0, {"c1": decision}, pack)
+    assert "c1" in excinfo.value.errors_by_team
+
+
+def test_over_dismissal_rejected(state_0, pack):
+    """Dismissing more production staff than are employed is rejected."""
+    from sim_engine.validation import InvalidDecisionError
+
+    decision = _build_decision(
+        team_id="c1", period=1,
+        price=2_800, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=2_500_000, value_analysis_spend=1_000_000,
+        order_units=30_000, target_volume=40_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=-99_999,  # invalid — far more than employed
+        training_per_employee=500, process_optimisation_spend=0,
+        non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=30_000_000, dividend=0,
+    )
+    with pytest.raises(InvalidDecisionError):
+        run_period(state_0, {"c1": decision}, pack)
+
+
+def test_non_salary_below_minimum_rejected(state_0, pack):
+    """A non-salary staff cost below the legal minimum is rejected."""
+    from sim_engine.validation import InvalidDecisionError
+
+    decision = _build_decision(
+        team_id="c1", period=1,
+        price=2_800, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=2_500_000, value_analysis_spend=1_000_000,
+        order_units=30_000, target_volume=40_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0,
+        non_salary_pct=0.20,  # invalid — below the 0.37 legal minimum
+        pension_reserve_pct=0.05,
+        short_term_loan=30_000_000, dividend=0,
+    )
+    with pytest.raises(InvalidDecisionError):
+        run_period(state_0, {"c1": decision}, pack)
+
+
+def test_industry_report(pack):
+    """Every team's bundle carries the same industry report; totals reconcile."""
+    from sim_engine.engine import build_initial_state
+
+    state_0 = build_initial_state(pack, company_ids=["A", "B"])
+    common = dict(
+        advertising=6_000_000, sales_force=100, researchers=34,
+        sustainability_spend=1_500_000, value_analysis_spend=800_000,
+        order_units=42_000, target_volume=44_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=20_000_000, dividend=0,
+    )
+    _, reports = run_period(
+        state_0,
+        {
+            "A": _build_decision(team_id="A", period=1, price=2_800, **common),
+            "B": _build_decision(team_id="B", period=1, price=3_000, **common),
+        },
+        pack,
+    )
+
+    industry_a = reports["A"].industry
+    industry_b = reports["B"].industry
+    assert industry_a is not None and industry_b is not None
+    # Both teams see the same industry report
+    assert industry_a.model_dump() == industry_b.model_dump()
+    # It lists both companies
+    assert {c.company_id for c in industry_a.companies} == {"A", "B"}
+    # Market total reconciles with the sum of per-team units sold
+    summed = sum(c.units_sold for c in industry_a.companies)
+    assert industry_a.market_total_units == summed
+    # Market shares sum to ~100%
+    total_share = sum(c.market_share_pct for c in industry_a.companies)
+    assert abs(total_share - 100.0) < 0.01
+
+
 def test_determinism(state_0, default_decision_p1, pack):
     """Same inputs should yield identical reports."""
     s1a, r1a = run_period(state_0, default_decision_p1, pack)

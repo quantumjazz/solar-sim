@@ -3,9 +3,19 @@
 A multi-team classroom **business simulation** for university management courses,
 set in the **solar PV and energy-storage** industry.
 
-> **Status:** Phase 0 complete — mechanics specification, scenario pack, and
-> licenses in place. No code yet. Phase 1 (engine MVP in Python) is next.
+> **Status:** Engine and instructor console working. Mechanics spec +
+> scenario pack (Phase 0), multi-team Python engine with full P&L/balance-
+> sheet/cash-flow articulation (Phases 1–2), and a Streamlit instructor
+> console for running a cohort. 23 tests pass (20 engine + 3 app).
 > **Public name:** TBD. The directory name `solar-sim` is a placeholder.
+
+## Quick start
+
+```bash
+pip install streamlit pydantic pyyaml
+streamlit run app/instructor_console.py        # the instructor console
+cd sim-engine && PYTHONPATH=src python -m pytest # engine tests
+```
 
 ## What this is
 
@@ -65,8 +75,8 @@ solar-sim/
 │       ├── scenario.yaml             starting state (Period 0)
 │       ├── period-events.yaml        nine-period scenario (periods 1–9)
 │       └── narrative/                public-domain news clippings (Phase 0 next pass)
-├── sim-engine/               ← Python package (Phase 1)
-└── app/                      ← Streamlit front-end (Phase 2+)
+├── sim-engine/               ← Python simulation engine (multi-team, tested)
+└── app/                      ← Streamlit instructor console
 ```
 
 ## How to read this repo (current state)

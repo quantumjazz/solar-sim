@@ -168,6 +168,37 @@ class CashFlowStatement(BaseModel):
     articulates: bool
 
 
+class IndustryCompanyLine(BaseModel):
+    """One company's published figures, as seen by the whole cohort."""
+
+    company_id: str
+    company_name: str
+    revenue: float
+    operating_income: float
+    net_income: float
+    total_assets: float
+    equity: float
+    total_debt: float
+    cash: float
+    units_sold: int
+    market_share_pct: float
+    share_price: float
+
+
+class IndustryReport(BaseModel):
+    """The cohort-public competitor view (matches docs/spec/00-overview.md §6).
+
+    Every team receives the same industry report each period. It contains the
+    level of detail a competitor's published annual report would show, plus
+    market-wide totals.
+    """
+
+    period: int
+    companies: List[IndustryCompanyLine] = Field(default_factory=list)
+    market_total_units: int = 0
+    market_total_revenue: float = 0
+
+
 class ReportBundle(BaseModel):
     """All reports for one company for one period."""
 
@@ -178,3 +209,6 @@ class ReportBundle(BaseModel):
     profit_and_loss: ProfitLossStatement
     balance_sheet: BalanceSheetReport
     cash_flow: CashFlowStatement
+    # The cohort-public competitor view. Set by run_period after every team
+    # has settled; the same object is shared across all teams' bundles.
+    industry: Optional[IndustryReport] = None
