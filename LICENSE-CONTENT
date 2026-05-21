@@ -1,0 +1,52 @@
+Creative Commons Attribution-ShareAlike 4.0 International (CC-BY-SA 4.0)
+
+Copyright (c) 2026 solar-sim contributors
+
+This license applies to the documentation, specifications, narrative
+content, and scenario packs in this repository:
+
+  - README.md
+  - docs/**
+  - scenarios/**
+  - any Markdown, YAML, or other content files describing rules, narrative,
+    or pedagogy
+
+You are free to:
+
+  - Share — copy and redistribute the material in any medium or format
+  - Adapt — remix, transform, and build upon the material for any purpose,
+    even commercially
+
+Under the following terms:
+
+  - Attribution — You must give appropriate credit, provide a link to the
+    license, and indicate if changes were made. You may do so in any
+    reasonable manner, but not in any way that suggests the licensor
+    endorses you or your use.
+
+  - ShareAlike — If you remix, transform, or build upon the material, you
+    must distribute your contributions under the same license as the
+    original.
+
+  - No additional restrictions — You may not apply legal terms or
+    technological measures that legally restrict others from doing
+    anything the license permits.
+
+Full license text:
+https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+----------------------------------------------------------------------
+
+The code in this repository is licensed separately under the MIT License;
+see LICENSE-CODE.
+
+----------------------------------------------------------------------
+
+Notice on third-party academic references
+
+This repository's specifications cite many academic works (textbooks,
+journal articles, public reports). Those citations are made under the
+ordinary academic fair-dealing/fair-use conventions: we describe ideas,
+cite the source, and never reproduce more than de minimis quoted text.
+The cited works themselves remain under their own licenses; no part of
+this CC-BY-SA license applies to them.

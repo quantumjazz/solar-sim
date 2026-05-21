@@ -1,0 +1,313 @@
+# solar-v1 — Period 0 starting state for the solar-PV scenario.
+#
+# All numerical values are educated starting points adapted from public industry
+# sources (IRENA, IEA PVPS, JRC PV Status Report, Fraunhofer ISE — see
+# docs/sources.md §7). They are NOT lifted from any commercial competitor's
+# parameter set. They will be tuned during pilot runs.
+#
+# Conventions:
+#   - All monetary values in EUR unless suffixed with another currency.
+#   - All times in "periods" where 1 period = 1 fiscal year.
+#   - Indices are dimensionless, with 100 = neutral starting baseline.
+#   - "id" fields are immutable; "name" fields are display labels and may change.
+
+scenario:
+  id: solar-v1
+  version: 0.1.0
+  display_name: "Solar-PV Manufacturer (single-product start)"
+  description: |
+    A residential solar-PV module manufacturer at the start of its journey.
+    Period 0 represents the inherited operations; teams take over from
+    Period 1. Successor product (Gen-2 high-efficiency module), mid-market
+    product (plug-in balcony solar), and second market (export, USD) open
+    progressively in later periods — see period-events.yaml.
+  language: en
+  base_currency: EUR
+  starting_period: 0
+  trial_periods: [1, 2, 3]
+  real_periods: [4, 5, 6, 7, 8, 9]
+  random_seed: 17
+
+# ---- World defaults (apply when not overridden by a period event) ----
+world:
+  finance:
+    short_term_loan_rate: 0.08          # 8.0 %
+    long_term_loan_rate: 0.07           # 7.0 %, 10-period term
+    long_term_loan_term: 10
+    overdraft_rate: 0.13                # 13.0 %
+    securities_rate: 0.03               # 3.0 %
+    tax_rate: 0.30                      # 30 % corporate (deliberately gentler than
+                                        # TOPSIM's 45 %, more typical of EU corporate
+                                        # tax post-2017)
+    payment_in_period_pct: 0.80         # 80 % paid this period, 20 % next
+    min_cash: 100_000                   # auto-overdraft floor
+  hr:
+    hiring_cost_per_head: 12_500
+    dismissal_cost_per_head: 10_000
+    social_plan_thresholds:             # % of opening workforce dismissed → extra fee
+      - { threshold: 0.10, extra_per_dismissal: 15_000 }
+      - { threshold: 0.30, extra_per_dismissal: 20_000 }
+      - { threshold: 0.50, extra_per_dismissal: 25_000 }
+    overtime_max_pct: 0.10              # max 10 % overtime
+    overtime_step_fixed_cost: 500_000   # one-off overtime supervision cost
+    overtime_wage_premium_pct: 0.25     # 25 % wage premium for overtime hours
+    non_salary_pct_minimum: 0.37
+    non_salary_pct_default: 0.40
+    pension_reserve_pct_default: 0.05
+  production:
+    factory_material_cost_per_unit: 50  # EUR/unit (assembly consumables, wiring, fixings)
+    building_depreciation_per_period: 250_000
+    building_distribution_key:
+      purchasing: 0.05
+      production: 0.70
+      rnd: 0.05
+      sales: 0.05
+      administration: 0.15
+    environmental_compliance_baseline: 100
+    environmental_penalty_per_index_point: 150_000
+
+# ---- The company a team inherits at period 0 ----
+company_state_period_0:
+  name: "(player-renamed-each-cohort)"
+  cash: 0
+  securities: 0
+  short_term_loan:
+    amount: 27_000_000
+    rate: 0.08
+  long_term_loan:
+    amount: 0
+    rate: 0.07
+    remaining_periods: 0
+  overdraft:
+    amount: 0
+    rate: 0.13
+  pension_reserve: 13_860_000
+
+  # Carryover balance sheet pieces
+  equity:
+    subscribed_capital: 15_000_000
+    capital_reserves: 2_500_000
+    retained_earnings: 12_500_000
+    prior_period_net_income: 3_770_000
+    last_dividend: 1_000_000
+  trade_receivables_from_prior: 7_500_000   # 20% of prior period sales
+
+  cost_centres:
+    purchasing:
+      headcount: 18
+      salary_per_capita: 30_000
+    administration:
+      headcount: 202
+      salary_per_capita: 28_000
+    production:
+      headcount: 850
+      salary_per_capita: 30_000
+    rnd:
+      headcount: 34
+      salary_per_capita: 44_000
+    sales:
+      headcount: 100
+      salary_per_capita: 40_000
+
+  motivation_index: 80
+  competence_index: 100
+  process_optimisation_index: 100
+  image_index: 100
+  satisfaction_index: 100
+  rating_index: 87
+
+# ---- Products available at game start ----
+products:
+  - id: panel_gen1
+    display_name: "Residential PV System Kit (Gen 1)"
+    category: pv_system
+    available_from_period: 0
+    # The product is a packaged residential PV system kit (modules + string
+    # inverter + mounting hardware + wiring) sold wholesale to installers and
+    # retailers, who mark it up into a complete ~8 kW home installation.
+    # Pricing it as a kit (~EUR 2,800) keeps unit volumes in the tens of
+    # thousands and total market revenue consistent with the inherited
+    # cost base. See docs/spec/08-solar-narrative.md.
+    # Index baselines: 100 = average competitor at start
+    indices:
+      efficiency: 100
+      sustainability: 100
+      value_analysis: 100
+    # Production economics
+    input_material_units_per_product: 1
+    factory_material_cost_per_unit: 50
+    capacity_per_line_unit: 1
+    production_capacity_per_person: 50
+    # Inventory at start
+    initial_inventory:
+      input_material_units: 15_000
+      input_material_unit_value: 1_000
+      finished_goods_units: 5_000
+      finished_goods_unit_value: 1_900
+    # Purchase price tiers for input material (EUR/unit). Volume discounts
+    # reward larger orders. Tuned so a lean decision is roughly break-even
+    # and an aggressive index-building decision runs a controlled loss.
+    purchase_tiers:
+      - { max_units: 30_000, unit_price: 1_150 }
+      - { max_units: 50_000, unit_price: 1_000 }
+      - { max_units: 70_000, unit_price: 900 }
+      - { max_units: null,   unit_price: 850 }   # 70 000+
+
+# ---- Markets ----
+markets:
+  - id: market_1
+    display_name: "Domestic (EUR)"
+    currency: EUR
+    open_from_period: 0
+    transport_cost_per_unit: 10
+    spillover_fraction: 0.80
+    coefficients:                      # see docs/spec/01-sales.md §6
+      alpha_market: 0.6
+      beta_price: 2.5
+      beta_ad: 0.7
+      beta_sf: 0.5
+      beta_prod: 1.2
+      beta_img: 0.5
+      beta_sat: 0.5
+      product_weights:                 # residential
+        efficiency: 0.5
+        sustainability: 0.3
+        value_analysis: 0.2
+      ads_ref: 12_000_000
+      sf_ref: 200
+      ci_ref: 3_000_000
+    market_potential_period_0:         # units
+      panel_gen1: 215_000              # ~43 000 per company × 5 companies
+
+  - id: market_2
+    display_name: "Export (USD)"
+    currency: USD
+    open_from_period: 3                # opens later
+    transport_cost_per_unit: 30
+    fx_per_base_at_start: 1.10         # 1 EUR = 1.10 USD at scenario start;
+                                       # period_events.yaml may move this
+    spillover_fraction: 0.80
+    coefficients:
+      alpha_market: 0.7
+      beta_price: 3.0                  # more price-sensitive export market
+      beta_ad: 0.5
+      beta_sf: 0.4
+      beta_prod: 1.0
+      beta_img: 0.4
+      beta_sat: 0.5
+      product_weights:
+        efficiency: 0.6
+        sustainability: 0.2
+        value_analysis: 0.2
+      ads_ref: 5_000_000
+      sf_ref: 80
+      ci_ref: 3_000_000
+
+# ---- Production line catalog ----
+# Existing lines (inherited at period 0) and types available for purchase.
+production_line_catalog:
+  - type_id: stringer_v1
+    display_name: "Stringer Line V1 (legacy)"
+    purchase_price: 20_000_000
+    useful_life: 10
+    normal_capacity: 14_000
+    other_fixed_cost: 300_000          # per period
+    environmental_index: 100
+    residual_revenue_pct: 0.20         # of NBV at disinvestment
+    max_purchase_per_period: 9
+  - type_id: laminator_v2
+    display_name: "Integrated Laminator V2"
+    purchase_price: 25_000_000
+    useful_life: 10
+    normal_capacity: 18_000
+    other_fixed_cost: 2_000_000
+    environmental_index: 105
+    residual_revenue_pct: 0.25
+    max_purchase_per_period: 9
+  - type_id: fullauto_v3
+    display_name: "Full-Auto Module Line V3"
+    purchase_price: 30_000_000
+    useful_life: 15
+    normal_capacity: 22_000
+    other_fixed_cost: 2_500_000
+    environmental_index: 110
+    residual_revenue_pct: 0.30
+    max_purchase_per_period: 9
+
+# ---- Existing lines (the 4 inherited at period 0) ----
+existing_lines_period_0:
+  - id: line_A1
+    type: stringer_v1
+    acquired_period_offset: -8
+    normal_capacity: 8_000
+    purchase_value: 12_500_000
+    remaining_life: 1
+    other_fixed_cost: 1_500_000
+    environmental_index: 83
+  - id: line_A2
+    type: stringer_v1
+    acquired_period_offset: -7
+    normal_capacity: 9_000
+    purchase_value: 15_000_000
+    remaining_life: 2
+    other_fixed_cost: 1_000_000
+    environmental_index: 90
+  - id: line_A3
+    type: stringer_v1
+    acquired_period_offset: -6
+    normal_capacity: 11_500
+    purchase_value: 20_000_000
+    remaining_life: 4
+    other_fixed_cost: 500_000
+    environmental_index: 95
+  - id: line_A4
+    type: stringer_v1
+    acquired_period_offset: -5
+    normal_capacity: 13_500
+    purchase_value: 20_000_000
+    remaining_life: 5
+    other_fixed_cost: 250_000
+    environmental_index: 98
+
+# ---- Inventory storage costs ----
+storage:
+  input_material_cost_per_1000_units: 50_000       # EUR per 1 000 units in stock
+  finished_goods_cost_per_1000_units: 100_000
+
+# ---- Maintenance availability table (% of normal capacity vs spend per line) ----
+maintenance_table:
+  # Linear interpolation between rows is allowed; out-of-range clipped.
+  - { spend_per_line: 100_000,   availability: 0.50 }
+  - { spend_per_line: 500_000,   availability: 0.70 }
+  - { spend_per_line: 700_000,   availability: 0.80 }
+  - { spend_per_line: 1_000_000, availability: 0.95 }
+  - { spend_per_line: 1_500_000, availability: 0.97 }
+  - { spend_per_line: 3_000_000, availability: 0.99 }
+  - { spend_per_line: 4_000_000, availability: 1.00 }
+
+# ---- Index decay (when not invested in) ----
+index_decay:
+  efficiency_per_period: 0.01          # competitors are improving; you slip if you don't
+  sustainability_per_period: 0.01
+  value_analysis_per_period: 0.01
+  competence_per_period: 0.01
+
+# ---- Marketing-mix benchmarks for the period-0 narrative ----
+period_0_decisions_narrative_only:
+  # These are the DECISIONS the prior board made in period 0. Used only to
+  # initialise the company state. Teams do not "see" these as starting decisions
+  # — they are baked into the inherited state.
+  sales:
+    panel_gen1:
+      market_1:
+        price: 2_800
+        advertising: 6_000_000
+        sales_force: 100
+      corporate_identity: 2_000_000
+  rnd:
+    panel_gen1:
+      researchers: 34
+      sustainability_spend: 2_500_000
+      value_analysis_spend: 1_000_000
+  finance:
+    dividend_declared: 1_000_000

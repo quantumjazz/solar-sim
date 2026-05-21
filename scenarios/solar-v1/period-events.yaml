@@ -1,0 +1,343 @@
+# solar-v1 — period-by-period scenario events
+#
+# Each entry describes what changes about the world between the previous
+# period and this one. Engine reads this file at scenario load and applies
+# the events at the start of each period (before validating that period's
+# team decisions).
+#
+# Narrative for each period lives in narrative/period-N.md (Markdown). The
+# headline here is the short version used in report screens; the full
+# narrative is shown in the period briefing.
+#
+# All numbers adapted from public industry sources (IRENA, IEA PVPS, JRC,
+# BloombergNEF surveys, OECD Economic Outlook, ECB Economic Bulletin) —
+# see docs/sources.md §7. Not lifted from any commercial product.
+
+events:
+
+  # ============================================================================
+  - period: 1
+    phase: trial
+    headline: "Modest recovery; first bulk-buyer offer appears"
+    narrative_file: narrative/period-1.md
+    economy:
+      gdp_growth: 0.02
+      inflation: 0.00
+      wage_growth: 0.03
+      sentiment: "cautious recovery"
+    parameter_changes:
+      wages:                       # absolute new values (EUR/year)
+        purchasing:     31_000
+        administration: 29_000
+        production:     31_000
+        rnd:            46_000
+        sales:          42_000
+      factory_material_cost_per_unit: 46     # was 50
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 230_000      # +7 % over period 0
+    bulk_buyers:
+      - market: market_1
+        product: panel_gen1
+        max_units_per_company: 5_000
+        price: 2_500
+        note: "Regional retail-chain offer"
+
+  # ============================================================================
+  - period: 2
+    phase: trial
+    headline: "Inflation lifts; Central Bank cuts rates; suppliers raise prices"
+    narrative_file: narrative/period-2.md
+    economy:
+      gdp_growth: 0.02
+      inflation: 0.02
+      wage_growth: 0.00
+      sentiment: "stabilising"
+    parameter_changes:
+      hiring_cost_per_head: 14_000          # was 12 500
+      max_dismissals_production: 100        # tight labour market
+      finance.short_term_loan_rate: 0.075
+      finance.long_term_loan_rate: 0.065
+      finance.overdraft_rate: 0.125
+      finance.securities_rate: 0.035
+      input_material_price_change_pct:
+        panel_gen1: 0.03                     # supplier +3 %
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 250_000               # +9 %
+    bulk_buyers:
+      - market: market_1
+        product: panel_gen1
+        max_units_per_company: 8_000
+        price: 2_450
+    tenders:
+      - market: market_1
+        product: panel_gen1
+        units_required: 3_000
+        max_acceptable_price: 2_900
+        delivery_period: 3
+    product_unlocks:
+      - product_id: panel_gen2
+        development_required: true
+        pre_launch_indices_at_unlock:
+          efficiency: 85
+          sustainability: 45
+          value_analysis: 90
+        notes: |
+          Pre-launch development of Gen-2 is now possible. Cannot be
+          launched until period 4 due to production-line readiness.
+    notable_events:
+      - type: production_line_offer
+        type_id: fullauto_v3
+        discounted_price: 22_500_000        # one-period offer
+        reason: "Equipment-maker promotional pricing"
+
+  # ============================================================================
+  - period: 3
+    phase: trial
+    headline: "Export market opens; Gen-2 launchable next period"
+    narrative_file: narrative/period-3.md
+    economy:
+      gdp_growth: 0.03
+      inflation: 0.02
+      wage_growth: 0.00
+      sentiment: "expansion"
+    parameter_changes:
+      input_material_price_change_pct:
+        panel_gen1: 0.03                     # supplier +3 % again
+      production_capacity_per_person:
+        panel_gen1: 45                       # was 50 — weekly hours cut to 35h
+      max_dismissals_production: 0           # collective bargaining job protection
+    market_changes:
+      market_2:
+        open_from_period: 3
+        market_potential_units:
+          panel_gen1: 25_000                 # ~10 % of market 1
+        fx_per_base: 1.10                    # 1 EUR = 1.10 USD
+      market_1:
+        market_potential_units:
+          panel_gen1: 260_000
+    bulk_buyers:
+      - market: market_1
+        product: panel_gen1
+        max_units_per_company: 9_000
+        price: 2_475
+    tenders:
+      - market: market_1
+        product: panel_gen1
+        units_required: 14_000
+        max_acceptable_price: null            # capped at retail price
+        delivery_period: 4
+        note: "Leasing company tender — large"
+    product_unlocks:
+      - product_id: storage_box
+        development_required: true
+        available_for_production_from: 5
+        available_for_sale_from: 5
+        pre_launch_indices_at_unlock:
+          efficiency: 80
+          sustainability: 45
+          value_analysis: 90
+
+  # ============================================================================
+  - period: 4
+    phase: real
+    headline: "Recession in market 1; Gen-2 can launch"
+    narrative_file: narrative/period-4.md
+    economy:
+      gdp_growth: -0.01
+      inflation: 0.03
+      wage_growth: 0.03
+      sentiment: "recession"
+    parameter_changes:
+      wages:
+        purchasing:     32_000
+        administration: 30_000
+        production:     32_000
+        rnd:            48_000
+        sales:          44_000
+      finance.short_term_loan_rate: 0.080    # restored
+      finance.long_term_loan_rate: 0.070
+      finance.overdraft_rate: 0.130
+      max_dismissals_production: 100
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 234_000                # −10 %
+      market_2:
+        market_potential_units:
+          panel_gen1: 30_000                 # +20 %
+        fx_per_base: 1.05                    # USD slightly stronger
+    bulk_buyers:
+      - market: market_1
+        product: panel_gen1
+        max_units_per_company: 7_000
+        price: 2_650
+    tenders:
+      - market: market_1
+        product: panel_gen1
+        units_required: 9_000
+        max_acceptable_price: 2_800
+        delivery_period: 5
+        note: "Foreign government tender"
+    product_unlocks:
+      - product_id: panel_gen2
+        available_for_production_from: 4
+        available_for_sale_from: 4
+        notes: "Gen-2 launchable now. Min indices: efficiency 100, sustainability 100."
+
+  # ============================================================================
+  - period: 5
+    phase: real
+    headline: "Tighter environmental rules; balcony-solar segment opens"
+    narrative_file: narrative/period-5.md
+    economy:
+      gdp_growth: -0.003
+      inflation: 0.012
+      wage_growth: 0.00
+      sentiment: "trough"
+    parameter_changes:
+      input_material_price_change_pct:
+        panel_gen1: 0.15                     # +15 % on Gen-1 inputs as volumes fall
+      transport_cost_per_unit:
+        market_1: 70                         # was 25 — trucking tax
+        market_2: 165                        # was 75
+      finance.overdraft_rate: 0.145          # bank tightening
+      world.production.environmental_compliance_baseline: 115   # tightened
+      world.hr.overtime_max_pct: 0.00        # overtime ban (union)
+      world.hr.pension_reserve_pct_default: 0.06               # union deal
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 210_000                # −10 %
+      market_2:
+        market_potential_units:
+          panel_gen1: 30_000                 # flat
+        fx_per_base: 1.00
+    notable_events:
+      - type: env_index_step
+        affects: all_production_lines
+        delta: -15
+        reason: "Environmental Act KWA II §4 — stricter classification"
+      - type: max_dismissals_production
+        limit: 1_200
+        reason: "End of collective-bargaining job-protection clause"
+    product_unlocks:
+      - product_id: balcony_solar
+        available_for_production_from: 5
+        available_for_sale_from: 5
+        notes: |
+          Mid-market plug-in solar kit. Higher unit volumes, lower margin.
+          Can be externally produced (contract manufacturer) up to a
+          quota — see scenario.yaml for the external-production tier table.
+      - product_id: storage_box
+        available_for_production_from: 5
+        available_for_sale_from: 5
+        notes: "Battery storage — separate production line, market 1 only this period."
+
+  # ============================================================================
+  - period: 6
+    phase: real
+    headline: "Tax hike, one-off remediation, market 2 weakens"
+    narrative_file: narrative/period-6.md
+    economy:
+      gdp_growth: 0.014                      # modest recovery
+      inflation: 0.04                        # cost-push
+      wage_growth: 0.03
+      sentiment: "stagflation lite"
+    parameter_changes:
+      world.finance.tax_rate: 0.55           # tax hike to 55 %
+      wages:
+        purchasing:     33_000
+        administration: 31_000
+        production:     33_000
+        rnd:            50_000
+        sales:          46_000
+      max_dismissals_production: 200
+      world.finance.payment_in_period_pct: 0.70   # customers delay
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 220_000                # modest recovery
+      market_2:
+        market_potential_units:
+          panel_gen1: 22_000                 # FX hits
+        fx_per_base: 0.90
+    bulk_buyers:
+      - market: market_1
+        product: panel_gen1
+        max_units_per_company: 7_000
+        price: 2_700
+    notable_events:
+      - type: one_off_other_expense
+        amount: 6_000_000
+        reason: "Mandatory repair of industrial-waste purification plant"
+
+  # ============================================================================
+  - period: 7
+    phase: real
+    headline: "Trade duties cut; storage demand surges"
+    narrative_file: narrative/period-7.md
+    economy:
+      gdp_growth: 0.01
+      inflation: 0.003
+      wage_growth: 0.015
+      sentiment: "slow climb"
+    parameter_changes:
+      world.finance.tax_rate: 0.45           # tax cut to 45 %
+      world.finance.payment_in_period_pct: 0.75
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 225_000
+      market_2:
+        market_potential_units:
+          panel_gen1: 24_000                 # +10 %
+        fx_per_base: 0.95
+    bulk_buyers:
+      - market: market_1
+        product: panel_gen1
+        max_units_per_company: 7_000
+        price: 2_800
+        prepayment_required: true
+        note: "New bulk-buyer; prepays in advance"
+
+  # ============================================================================
+  - period: 8
+    phase: real
+    headline: "Storage and balcony solar accelerate; panels cool"
+    narrative_file: narrative/period-8.md
+    economy:
+      gdp_growth: 0.015
+      inflation: 0.005
+      wage_growth: 0.02
+      sentiment: "rotation"
+    parameter_changes:
+      world.finance.tax_rate: 0.30           # back to default
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 220_000
+        # Storage and balcony market sizes come from product-specific potentials,
+        # populated by the engine from product unlocks.
+      market_2:
+        market_potential_units:
+          panel_gen1: 28_000                 # +17 %
+        fx_per_base: 1.00
+
+  # ============================================================================
+  - period: 9
+    phase: real
+    headline: "Final period — settle, then score"
+    narrative_file: narrative/period-9.md
+    economy:
+      gdp_growth: 0.012
+      inflation: 0.005
+      wage_growth: 0.015
+      sentiment: "steady"
+    parameter_changes: {}                    # no surprises in the scoring period
+    notable_events:
+      - type: scoring_period
+        note: "Equity at end of this period is the grade input."
