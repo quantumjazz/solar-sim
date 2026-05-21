@@ -22,6 +22,19 @@ Working:
   allocated across competing teams in proportion to their attractiveness
   score (price, advertising, sales force, product indices, image,
   satisfaction). Under-supply spillover is redistributed once.
+- **Sales channels.** Finished goods are allocated in priority order:
+  won tenders (lowest valid bid wins) → bulk buyers → domestic retail →
+  export retail. A `committed` ledger keeps retail from overselling.
+- **Two markets.** `market_1` (domestic, base currency) and `market_2`
+  (export) — export revenue is FX-converted to base currency.
+- **Production lines.** Investment (lines bought from the catalog, available
+  the same period) and disinvestment (residual revenue + book-value
+  write-off as extraordinary items).
+- **HR productivity.** Productivity Index I = competence × process
+  optimisation × adaptation × motivation; Productivity Index II is the
+  per-product learning curve. Training, process-optimisation spend, hiring
+  waves and pay all move the indices. Purchasing and administration
+  headcount auto-scale to revenue.
 - **Period-event application.** `period-events.yaml` overrides — wages, tax
   rate, interest rates, factory-material cost, input-material price changes,
   market potentials, transport costs — all flow through via a resolved
@@ -29,16 +42,21 @@ Working:
 - **Three-phase period loop.** Pre-market (per company) → market settlement
   (across cohort) → post-market (per company).
 
-Still simplified (explicit `TODO(v0.2.x)` markers in code):
+Still simplified (explicit `TODO` markers in code):
 
-- **Bulk buyer / tender channels** — sales is retail market-1 only.
-- **Multi-market** — `market_2` (export, FX) not yet wired into settlement.
-- **Multi-product capacity allocation** — production wired for one product.
-- **Productivity Index I / II** — cumulative units tracked; the
-  motivation × competence × adaptation × process factor is a placeholder.
-- **Auto-scaled purchasing/admin headcount.**
-- **Successor-product launch, environmental tech, slow image/satisfaction
-  dynamics.**
+- **Successor-product launch** — `panel_gen2`, `storage_box`, `balcony_solar`
+  unlock in the scenario but launch mechanics (replacing a generation,
+  scrapping old inventory) are deferred to v0.3.
+- **Tender delivery lag** — won tenders deliver in the current period rather
+  than honouring `delivery_period`.
+- **Overtime, environmental tech, the category-level price-elasticity of
+  total market size, slow image/satisfaction dynamics.**
+
+> **Calibration note.** The `solar-v1` market potentials are sized for a
+> full cohort at scale. With a small cohort or early in the game, market_1
+> demand exceeds total cohort capacity, so the export market is hard to
+> reach until teams have invested in production lines. Tuning is a Phase 6
+> task and does not affect engine correctness.
 
 ### v0.1 — MVP (superseded)
 

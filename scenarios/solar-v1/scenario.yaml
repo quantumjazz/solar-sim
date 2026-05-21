@@ -109,12 +109,13 @@ company_state_period_0:
       headcount: 100
       salary_per_capita: 40_000
 
-  motivation_index: 80
-  competence_index: 100
-  process_optimisation_index: 100
+  motivation_index: 80          # 100-scale; the inherited company has low morale
+  competence_index: 1.0         # factor-scale, centred at 1.00
+  process_optimisation_index: 1.0
   image_index: 100
   satisfaction_index: 100
   rating_index: 87
+  last_period_revenue: 130_000_000   # inherited company's prior-year revenue
 
 # ---- Products available at game start ----
 products:

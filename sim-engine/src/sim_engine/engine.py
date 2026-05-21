@@ -100,6 +100,10 @@ class _PeriodScratch:
     total_depreciation: float = 0
     total_overhead_other: float = 0  # CI, advertising, market research, R&D consulting, env. compliance, rework, maintenance, etc.
 
+    # Production-line capital movements (investing cash flows)
+    line_purchases: float = 0
+    disinvestment_proceeds: float = 0
+
     # Inventory changes
     change_in_finished_inventory: float = 0
 
@@ -225,16 +229,19 @@ def _pre_market_phase(
     # 2. HR — workforce + period-event wage updates
     _apply_hr(new_company, decision, pack, ctx, scratch)
 
-    # 3. Capacity laddering
+    # 3. Production-line investment / disinvestment
+    _apply_line_changes(new_company, decision, pack, ctx, scratch)
+
+    # 4. Capacity laddering (includes any lines just bought)
     available_capacity = _compute_available_capacity(new_company, decision, pack)
 
-    # 4. Material purchasing
+    # 5. Material purchasing
     _apply_purchasing(new_company, decision, pack, ctx, scratch)
 
-    # 5. Production
+    # 6. Production
     _apply_production(new_company, decision, pack, ctx, scratch, available_capacity)
 
-    # 6. Roll up finished-goods inventory (newly produced units enter at CGM)
+    # 7. Roll up finished-goods inventory (newly produced units enter at CGM)
     _apply_inventory_post_production(new_company, decision, pack, scratch)
 
     return new_company, scratch
@@ -270,8 +277,12 @@ def _post_market_phase(
         period=next_period,
     )
 
-    # 10. Slow indices (motivation, image, satisfaction) — placeholder
+    # 10. Slow indices (image, satisfaction) — placeholder
     _update_slow_indices(new_company, decision, scratch)
+
+    # Carry this period's revenue forward so next period's purchasing and
+    # administration headcounts can auto-scale to it.
+    new_company.last_period_revenue = scratch.total_revenue
 
     # 11. Build report bundle
     exec_sum = _build_executive_summary(
@@ -341,6 +352,20 @@ def _apply_rnd(
         )
 
 
+# --- HR coefficients (see docs/spec/04-hr.md §4-§5) -----------------------
+# Competence index — gain from training, slow decay otherwise.
+_C_K, _C_REF, _DECAY_C = 0.04, 1_600.0, 0.02
+# Process-optimisation index — gain from process-opt spend, slow decay.
+_P_K, _P_REF, _DECAY_P = 0.05, 2_500_000.0, 0.02
+# Adaptation index — orientation drag from a hiring wave.
+_A_K = 0.5
+# Learning curve — Productivity Index II gain coefficient (Wright's law).
+_L_K = 0.07
+# Auto-scaled cost centres: headcount ≈ slope · revenue_in_mEUR, clamped.
+_PURCHASING_SLOPE, _PURCHASING_MIN, _PURCHASING_MAX = 0.138, 6, 25
+_ADMIN_SLOPE, _ADMIN_MIN, _ADMIN_MAX = 1.55, 40, 280
+
+
 def _apply_hr(
     company: CompanyState,
     decision: TeamDecision,
@@ -350,20 +375,24 @@ def _apply_hr(
 ) -> None:
     """Workforce roll-forward and productivity indices.
 
-    v0.2: hires/dismissals applied to production; period-event wage updates
-    from context; productivity indices updated. Auto-scaling of purchasing
-    and admin headcount deferred to a later v0.2 iteration.
+    v0.2.x: hires/dismissals on production; auto-scaled purchasing and
+    administration headcount (from last period's revenue); period-event wage
+    updates; Productivity Index I recomputed from competence, process
+    optimisation, adaptation, and motivation.
     """
 
     world = ctx.world
-    # Period-event wage overrides come from the context (already resolved)
+
+    # Period-event wage overrides come from the context (already resolved).
     for cc_id, new_salary in ctx.wages_by_cost_centre.items():
         if cc_id in company.cost_centres:
             company.cost_centres[cc_id].salary_per_capita = new_salary
 
-    # Production workforce change
+    # --- Production workforce change (team decision) -----------------------
     prod_cc = company.cost_centres["production"]
+    opening_production = prod_cc.headcount
     change = decision.hr.production_workforce_change
+    hires = max(0, change)
     if change > 0:
         scratch.total_hiring_costs += change * world.hr.hiring_cost_per_head
         prod_cc.headcount += change
@@ -372,7 +401,20 @@ def _apply_hr(
         scratch.total_dismissal_costs += dismissed * world.hr.dismissal_cost_per_head
         prod_cc.headcount = max(0, prod_cc.headcount - dismissed)
 
-    # Compute wages for the period
+    # --- Auto-scaled purchasing & administration ---------------------------
+    # Headcount tracks the *previous* period's revenue (avoids a circular
+    # dependency on this period's not-yet-settled revenue).
+    revenue_m = company.last_period_revenue / 1_000_000.0
+    _auto_scale_cost_centre(
+        company, "purchasing", revenue_m,
+        _PURCHASING_SLOPE, _PURCHASING_MIN, _PURCHASING_MAX, world, scratch,
+    )
+    _auto_scale_cost_centre(
+        company, "administration", revenue_m,
+        _ADMIN_SLOPE, _ADMIN_MIN, _ADMIN_MAX, world, scratch,
+    )
+
+    # --- Wages for the period ----------------------------------------------
     total_wages = sum(
         cc.headcount * cc.salary_per_capita for cc in company.cost_centres.values()
     )
@@ -380,14 +422,143 @@ def _apply_hr(
     scratch.total_non_salary = total_wages * decision.hr.non_salary_pct
     scratch.total_pension_contribution = total_wages * decision.hr.pension_reserve_pct
 
-    # Training cost (production only in v0.2)
-    scratch.total_training = (
-        decision.hr.training_per_employee * prod_cc.headcount
-    )
+    # Training cost (production only in v0.2.x).
+    scratch.total_training = decision.hr.training_per_employee * prod_cc.headcount
     scratch.total_overhead_other += scratch.total_training
 
-    # Pension reserve accumulates on the BS.
+    # Pension reserve accumulates on the balance sheet.
     company.pension_reserve += scratch.total_pension_contribution
+
+    # --- Productivity Index I components -----------------------------------
+    # Competence — gain from training, decay otherwise.
+    company.competence_index = max(
+        0.80,
+        company.competence_index * (1 - _DECAY_C)
+        + _C_K * math.log1p(decision.hr.training_per_employee / _C_REF),
+    )
+    # Process optimisation — gain from process-opt spend, decay otherwise.
+    company.process_optimisation_index = max(
+        0.80,
+        company.process_optimisation_index * (1 - _DECAY_P)
+        + _P_K * math.log1p(decision.hr.process_optimisation_spend / _P_REF),
+    )
+    # Adaptation — a hiring wave temporarily drags productivity.
+    hire_ratio = hires / opening_production if opening_production > 0 else 0.0
+    company.adaptation_index = max(0.5, 1.0 - _A_K * hire_ratio)
+
+    # Motivation — slow drift toward a target set by pay, training and churn.
+    churn_ratio = abs(change) / opening_production if opening_production > 0 else 0.0
+    target_motivation = (
+        80.0
+        + 400.0 * (decision.hr.non_salary_pct - world.hr.non_salary_pct_minimum)
+        + 30.0 * (company.competence_index - 1.0)
+        - 120.0 * churn_ratio
+    )
+    company.motivation_index = _clip(
+        company.motivation_index + 0.30 * (target_motivation - company.motivation_index),
+        50.0,
+        150.0,
+    )
+
+    # Productivity Index I = competence × process-opt × adaptation × motivation.
+    # Motivation (100-scale) contributes via a gentle 0.6 + 0.4·(m/100) factor,
+    # bounding its effect to roughly [0.8, 1.2].
+    motivation_factor = 0.6 + 0.4 * (company.motivation_index / 100.0)
+    company.productivity_index_i = (
+        company.competence_index
+        * company.process_optimisation_index
+        * company.adaptation_index
+        * motivation_factor
+    )
+
+
+def _auto_scale_cost_centre(
+    company: CompanyState,
+    cc_id: str,
+    revenue_m: float,
+    slope: float,
+    floor: int,
+    cap: int,
+    world,
+    scratch: _PeriodScratch,
+) -> None:
+    """Adjust a cost centre's headcount to track revenue; bill hire/fire costs."""
+    cc = company.cost_centres.get(cc_id)
+    if cc is None:
+        return
+    target = int(round(slope * revenue_m))
+    target = max(floor, min(cap, target))
+    delta = target - cc.headcount
+    if delta > 0:
+        scratch.total_hiring_costs += delta * world.hr.hiring_cost_per_head
+    elif delta < 0:
+        scratch.total_dismissal_costs += (-delta) * world.hr.dismissal_cost_per_head
+    cc.headcount = target
+
+
+def _clip(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def _apply_line_changes(
+    company: CompanyState,
+    decision: TeamDecision,
+    pack: LoadedScenarioPack,
+    ctx: ResolvedPeriodContext,
+    scratch: _PeriodScratch,
+) -> None:
+    """Process production-line investment and disinvestment decisions.
+
+    Investment: new lines of a catalog type are appended and are available
+    for production in the same period (cash paid in full).
+
+    Disinvestment: a named line is removed; its remaining net book value is
+    written off as an extraordinary expense, and a type-specific fraction of
+    that book value is recovered as extraordinary income (and cash).
+
+    See docs/spec/03-production.md §1.
+    """
+    catalog = {item.type_id: item for item in pack.pack.production_line_catalog}
+
+    # --- Disinvestment -----------------------------------------------------
+    for line_id in decision.production.lines.disinvest:
+        line = next((l for l in company.lines if l.id == line_id), None)
+        if line is None:
+            continue
+        if line.useful_life > 0:
+            nbv = line.purchase_value * (line.remaining_life / line.useful_life)
+        else:
+            nbv = 0.0
+        item = catalog.get(line.type)
+        residual_pct = item.residual_revenue_pct if item is not None else 0.20
+        proceeds = nbv * residual_pct
+        scratch.total_extraordinary_income += proceeds
+        scratch.total_extraordinary_expense += nbv
+        scratch.disinvestment_proceeds += proceeds
+        company.lines.remove(line)
+
+    # --- Investment --------------------------------------------------------
+    for type_id, count in decision.production.lines.invest.counts.items():
+        if count <= 0:
+            continue
+        item = catalog.get(type_id)
+        if item is None:
+            continue
+        for k in range(count):
+            company.lines.append(
+                ProductionLineState(
+                    id=f"{company.id}-{type_id}-p{ctx.period}-{k + 1}",
+                    type=type_id,
+                    acquisition_period=ctx.period,
+                    purchase_value=item.purchase_price,
+                    normal_capacity=item.normal_capacity,
+                    useful_life=item.useful_life,
+                    remaining_life=item.useful_life,
+                    other_fixed_cost=item.other_fixed_cost,
+                    environmental_index=item.environmental_index,
+                )
+            )
+        scratch.line_purchases += count * item.purchase_price
 
 
 def _compute_available_capacity(
@@ -483,54 +654,82 @@ def _apply_production(
 ) -> None:
     """Decide how much to actually produce, respecting capacity and staff.
 
-    v0.2: still single-product wired here (multi-product capacity allocation
-    deferred to v0.2.x). Staff productivity factor reads from the company's
-    indices; we use a placeholder Productivity Index I = 1.0 until v0.2.x.
+    v0.2.x: actual per-person productivity = base capacity × Productivity
+    Index I (company-wide) × Productivity Index II (per-product learning
+    curve). Production-line capacity is shared across products in proportion
+    to each product's target volume weighted by its capacity-per-line-unit.
     """
 
     total_capacity = sum(capacity_by_type.values())
     prod_cc = company.cost_centres["production"]
     spec_by_id = {p.id: p for p in ctx.products}
 
+    # Capacity-weighted shares so multiple products split the line capacity.
+    weighted_targets: Dict[str, float] = {}
     for p_dec in decision.production.by_product:
         spec = spec_by_id[p_dec.product]
-        # Staff-bound: how many units can current production headcount produce?
-        # v0.1 uses base productivity (no I/II adjustment yet)
-        staff_capacity = prod_cc.headcount * spec.production_capacity_per_person
-        # Material-bound: do we have enough materials?
-        materials_needed = p_dec.target_volume * spec.input_material_units_per_product / (
-            company.products[p_dec.product].value_analysis_index / 100.0
+        weighted_targets[p_dec.product] = (
+            p_dec.target_volume * spec.capacity_per_line_unit
         )
+    total_weighted = sum(weighted_targets.values())
+
+    for p_dec in decision.production.by_product:
+        spec = spec_by_id[p_dec.product]
+        product_state = company.products[p_dec.product]
+
+        # Staff-bound: actual productivity = base × Index I × Index II.
+        per_person = (
+            spec.production_capacity_per_person
+            * company.productivity_index_i
+            * product_state.productivity_index_ii
+        )
+        staff_capacity = prod_cc.headcount * per_person
+
+        # Line-bound: this product's slice of the shared production capacity.
+        if total_weighted > 0:
+            share = weighted_targets[p_dec.product] / total_weighted
+        else:
+            share = 0.0
+        line_capacity = (total_capacity * share) / spec.capacity_per_line_unit
+
+        # Material-bound: how much can current materials inventory support?
         inv = company.inventories_materials[p_dec.product]
-        material_capacity = inv.units / spec.input_material_units_per_product
+        value_analysis_factor = product_state.value_analysis_index / 100.0
+        material_capacity = (
+            inv.units * value_analysis_factor / spec.input_material_units_per_product
+        )
 
         producible = min(
             p_dec.target_volume,
-            total_capacity / spec.capacity_per_line_unit,
+            line_capacity,
             staff_capacity,
             material_capacity,
         )
         units = max(0.0, producible)
         scratch.units_produced[p_dec.product] = units
 
-        # Materials consumed
-        material_units_used = units * spec.input_material_units_per_product / (
-            company.products[p_dec.product].value_analysis_index / 100.0
+        # Materials consumed (value analysis reduces material per unit).
+        material_units_used = (
+            units * spec.input_material_units_per_product / value_analysis_factor
         )
         material_cost = material_units_used * inv.unit_value
         scratch.material_units_consumed[p_dec.product] = material_units_used
         scratch.material_cost_consumed[p_dec.product] = material_cost
 
-        # Factory materials
+        # Factory materials.
         factory_cost = units * spec.factory_material_cost_per_unit
         scratch.factory_material_cost[p_dec.product] = factory_cost
 
-        # Update materials inventory (moving avg unit_value unchanged on consumption)
+        # Consume materials inventory (moving-average unit_value unchanged).
         inv.units = max(0.0, inv.units - material_units_used)
 
-        # Track cumulative production for the learning curve (placeholder; v0.1
-        # doesn't multiply productivity by index II yet).
-        company.products[p_dec.product].cumulative_units_produced += units
+        # Learning curve — update Productivity Index II from cumulative output.
+        prev_cumulative = product_state.cumulative_units_produced
+        if prev_cumulative > 0 and units > 0:
+            product_state.productivity_index_ii *= 1 + _L_K * math.log1p(
+                units / prev_cumulative
+            )
+        product_state.cumulative_units_produced += units
 
 
 def _apply_inventory_post_production(
@@ -594,20 +793,17 @@ def _settle_market(
     ctx: ResolvedPeriodContext,
     scratches: Dict[str, _PeriodScratch],
 ) -> None:
-    """Cohort-wide market settlement using the multinomial attraction model.
+    """Cohort-wide market settlement.
 
-    For each (product, market) with a positive market potential and at least
-    one selling team:
-      - Compute each team's attractiveness score
-      - Compute each team's share = attractiveness / sum_of_attractiveness
-      - Allocate market_potential × share to each team's *demand*
-      - Cap demand at each team's finished-goods supply → units sold
-      - Spillover from under-supply: up to spillover_fraction of unmet retail
-        demand is redistributed *once* to other companies in proportion to
-        their current share.
+    Finished-goods inventory is allocated across channels in priority order
+    (see docs/spec/01-sales.md §3):
 
-    Updates each company's scratch with units_sold, revenue, transport_cost.
-    The scratch's total_revenue is updated.
+      1. Won tenders   — lowest valid bid wins; winner supplies units_required
+      2. Bulk buyers   — every accepting team buys up to the per-company cap
+      3. Retail        — multinomial attraction model splits the market
+
+    A `committed` ledger tracks how much of each team's inventory the
+    priority channels have already consumed, so retail never oversells.
     """
 
     market_by_id = {m.id: m for m in ctx.markets}
@@ -618,103 +814,243 @@ def _settle_market(
         scratches[cid].revenue = {}
         scratches[cid].transport_cost = {}
 
-    # We only handle market_1 for now (v0.2 retail-only). market_2 is wired
-    # in v0.2.x once FX flows through accounting.
-    market = market_by_id.get("market_1")
-    if market is None or market.open_from_period > ctx.period:
-        return
-
-    # All products active this period
     active_product_ids = [
         p.id for p in ctx.products if p.available_from_period <= ctx.period
     ]
 
-    for product_id in active_product_ids:
-        market_potential = market.market_potential_period_0.get(product_id, 0)
-        if market_potential <= 0:
-            continue
+    # committed[cid][product_id] = units already sold via tender + bulk.
+    committed: Dict[str, Dict[str, int]] = {cid: {} for cid in companies}
 
-        # Gather (company_id, attractiveness, m_dec) for everyone selling this product
-        contestants: List[Tuple[str, float, "SalesPerMarketDecision"]] = []
-        for cid, company in companies.items():
-            if product_id not in company.products:
-                continue
-            decision = decisions[cid]
-            sales_dec = next(
-                (s for s in decision.sales.by_product if s.product == product_id),
-                None,
+    # --- Channel 1: tenders (priority 1) -----------------------------------
+    for tender in ctx.tenders:
+        if tender.product in active_product_ids:
+            _resolve_tender(tender, companies, decisions, scratches, committed)
+
+    # --- Channel 2: bulk buyers (priority 2) -------------------------------
+    for bulk in ctx.bulk_buyers:
+        if bulk.product in active_product_ids:
+            _resolve_bulk(bulk, companies, decisions, scratches, committed)
+
+    # --- Channel 3: retail (priority 3) ------------------------------------
+    # Settle market_1 before market_2: the domestic market has delivery
+    # priority, so it consumes inventory first (tracked via `committed`).
+    for market_id in ("market_1", "market_2"):
+        market = market_by_id.get(market_id)
+        if market is None or market.open_from_period > ctx.period:
+            continue
+        for product_id in active_product_ids:
+            _settle_retail(
+                market, product_id, companies, decisions, ctx, scratches, committed
             )
-            if sales_dec is None or sales_dec.market_1 is None:
-                continue
-            a = _company_attractiveness(
-                company, product_id, sales_dec.market_1, market
-            )
-            contestants.append((cid, a, sales_dec.market_1))
 
-        if not contestants:
+
+def _record_sale(
+    scratch: "_PeriodScratch",
+    product_id: str,
+    channel: str,
+    units: int,
+    revenue: float,
+    transport: float,
+) -> None:
+    """Record a sale in one channel into a company's scratch."""
+    scratch.units_sold.setdefault(product_id, {})[channel] = units
+    scratch.revenue.setdefault(product_id, {})[channel] = revenue
+    scratch.transport_cost.setdefault(product_id, {})[channel] = transport
+    scratch.total_revenue += revenue
+
+
+def _available_inventory(
+    company: CompanyState, product_id: str, committed: Dict[str, Dict[str, int]]
+) -> int:
+    """Finished-goods units still available after priority-channel commitments."""
+    inv = company.inventories_finished.get(product_id)
+    if inv is None:
+        return 0
+    already = committed[company.id].get(product_id, 0)
+    return max(0, int(inv.units) - already)
+
+
+def _resolve_tender(
+    tender,
+    companies: Dict[str, CompanyState],
+    decisions: Dict[str, TeamDecision],
+    scratches: Dict[str, _PeriodScratch],
+    committed: Dict[str, Dict[str, int]],
+) -> None:
+    """Award a tender to the lowest valid bidder; deliver in the current period.
+
+    TODO(v0.3): honour tender.delivery_period — won tenders should be carried
+    as a commitment and delivered in a later period.
+    """
+    # Collect valid bids; iterate sorted by company id for deterministic ties.
+    bids: List[Tuple[float, str]] = []
+    for cid in sorted(companies):
+        company = companies[cid]
+        if tender.product not in company.products:
             continue
-
-        total_attractiveness = sum(a for _, a, _ in contestants)
-        if total_attractiveness <= 0:
+        sd = next(
+            (s for s in decisions[cid].sales.by_product if s.product == tender.product),
+            None,
+        )
+        if sd is None or sd.tender is None or sd.tender.bid_price <= 0:
             continue
+        if (
+            tender.max_acceptable_price is not None
+            and sd.tender.bid_price > tender.max_acceptable_price
+        ):
+            continue
+        bids.append((sd.tender.bid_price, cid))
 
-        # Allocate demand
-        team_demand: Dict[str, int] = {}
-        team_share: Dict[str, float] = {}
-        for cid, a, _ in contestants:
-            share = a / total_attractiveness
-            team_share[cid] = share
-            team_demand[cid] = int(round(market_potential * share))
+    if not bids:
+        return
 
-        # Sell up to finished-goods inventory
-        team_sold: Dict[str, int] = {}
-        team_unmet: Dict[str, int] = {}
-        for cid, _, _ in contestants:
-            inv = companies[cid].inventories_finished[product_id]
-            sold = min(team_demand[cid], int(inv.units))
-            team_sold[cid] = sold
-            team_unmet[cid] = team_demand[cid] - sold
+    bids.sort()  # lowest price first; ties already broken by sorted cid
+    winning_price, winner = bids[0]
+    available = _available_inventory(companies[winner], tender.product, committed)
+    units = min(tender.units_required, available)
+    committed[winner][tender.product] = (
+        committed[winner].get(tender.product, 0) + units
+    )
+    # Tenders carry no transport cost (see docs/spec/01-sales.md §3).
+    _record_sale(
+        scratches[winner], tender.product, "tender", units, units * winning_price, 0.0
+    )
 
-        # Spillover: redistribute spillover_fraction of unmet demand to others
-        # in proportion to their current share, capped by their remaining supply.
-        spillover_fraction = market.spillover_fraction
-        total_unmet = sum(team_unmet.values())
-        if total_unmet > 0 and spillover_fraction > 0:
-            available_to_spillover = int(round(total_unmet * spillover_fraction))
-            # Pool of unsatisfied units to redistribute
-            remaining_to_distribute = available_to_spillover
-            # Redistribute in proportion to share; cap by remaining supply
-            recipients = [
-                (cid, team_share[cid])
-                for cid, _, _ in contestants
-                if team_unmet[cid] == 0  # only sell more to teams that satisfied their demand
-            ]
-            total_recipient_share = sum(s for _, s in recipients)
-            if total_recipient_share > 0:
-                for cid, s in recipients:
-                    extra_demand = int(
-                        round(available_to_spillover * (s / total_recipient_share))
-                    )
-                    inv = companies[cid].inventories_finished[product_id]
-                    extra_sold = min(
-                        extra_demand,
-                        max(0, int(inv.units) - team_sold[cid]),
-                        remaining_to_distribute,
-                    )
-                    team_sold[cid] += extra_sold
-                    remaining_to_distribute -= extra_sold
-                    if remaining_to_distribute <= 0:
-                        break
 
-        # Write into scratches
-        for cid, _, m_dec in contestants:
-            sold = team_sold[cid]
-            revenue = sold * m_dec.price
-            transport = sold * market.transport_cost_per_unit
-            scratches[cid].units_sold.setdefault(product_id, {})[market.id] = sold
-            scratches[cid].revenue.setdefault(product_id, {})[market.id] = revenue
-            scratches[cid].transport_cost.setdefault(product_id, {})[market.id] = transport
-            scratches[cid].total_revenue += revenue
+def _resolve_bulk(
+    bulk,
+    companies: Dict[str, CompanyState],
+    decisions: Dict[str, TeamDecision],
+    scratches: Dict[str, _PeriodScratch],
+    committed: Dict[str, Dict[str, int]],
+) -> None:
+    """Every team that accepts the bulk offer buys up to the per-company cap."""
+    for cid in sorted(companies):
+        company = companies[cid]
+        if bulk.product not in company.products:
+            continue
+        sd = next(
+            (s for s in decisions[cid].sales.by_product if s.product == bulk.product),
+            None,
+        )
+        if sd is None or sd.bulk_buyer is None or not sd.bulk_buyer.accept_offer:
+            continue
+        available = _available_inventory(company, bulk.product, committed)
+        units = min(sd.bulk_buyer.bid_units, bulk.max_units_per_company, available)
+        committed[cid][bulk.product] = committed[cid].get(bulk.product, 0) + units
+        # Bulk sales carry no transport cost.
+        _record_sale(
+            scratches[cid], bulk.product, "bulk", units, units * bulk.price, 0.0
+        )
+
+
+def _settle_retail(
+    market,
+    product_id: str,
+    companies: Dict[str, CompanyState],
+    decisions: Dict[str, TeamDecision],
+    ctx: ResolvedPeriodContext,
+    scratches: Dict[str, _PeriodScratch],
+    committed: Dict[str, Dict[str, int]],
+) -> None:
+    """Multinomial attraction model for one retail market and product.
+
+    Works for both the domestic market (`market_1`, base currency) and the
+    export market (`market_2`, foreign currency). For an export market, the
+    team's price is quoted in the foreign currency; revenue is converted to
+    base currency via the period's FX rate before it enters accounting.
+    """
+    market_potential = market.market_potential_period_0.get(product_id, 0)
+    if market_potential <= 0:
+        return
+
+    # FX: units of market currency per 1 base unit (1.0 for the home market).
+    fx = market.fx_per_base_at_start or 1.0
+
+    contestants: List[Tuple[str, float, "SalesPerMarketDecision"]] = []
+    for cid, company in companies.items():
+        if product_id not in company.products:
+            continue
+        sales_dec = next(
+            (s for s in decisions[cid].sales.by_product if s.product == product_id),
+            None,
+        )
+        if sales_dec is None:
+            continue
+        m_dec = sales_dec.market_1 if market.id == "market_1" else sales_dec.market_2
+        if m_dec is None:
+            continue
+        a = _company_attractiveness(company, product_id, m_dec, market, fx)
+        contestants.append((cid, a, m_dec))
+
+    if not contestants:
+        return
+    total_attractiveness = sum(a for _, a, _ in contestants)
+    if total_attractiveness <= 0:
+        return
+
+    team_demand: Dict[str, int] = {}
+    team_share: Dict[str, float] = {}
+    for cid, a, _ in contestants:
+        share = a / total_attractiveness
+        team_share[cid] = share
+        team_demand[cid] = int(round(market_potential * share))
+
+    # Sell up to inventory still available after the priority channels.
+    team_sold: Dict[str, int] = {}
+    team_unmet: Dict[str, int] = {}
+    for cid, _, _ in contestants:
+        available = _available_inventory(companies[cid], product_id, committed)
+        sold = min(team_demand[cid], available)
+        team_sold[cid] = sold
+        team_unmet[cid] = team_demand[cid] - sold
+
+    # Spillover: redistribute a fraction of unmet demand to teams that met
+    # theirs, once, in proportion to share and capped by remaining supply.
+    spillover_fraction = market.spillover_fraction
+    total_unmet = sum(team_unmet.values())
+    if total_unmet > 0 and spillover_fraction > 0:
+        available_to_spillover = int(round(total_unmet * spillover_fraction))
+        remaining = available_to_spillover
+        recipients = [
+            (cid, team_share[cid])
+            for cid, _, _ in contestants
+            if team_unmet[cid] == 0
+        ]
+        total_recipient_share = sum(s for _, s in recipients)
+        if total_recipient_share > 0:
+            for cid, s in recipients:
+                extra_demand = int(
+                    round(available_to_spillover * (s / total_recipient_share))
+                )
+                available = _available_inventory(
+                    companies[cid], product_id, committed
+                )
+                extra_sold = min(
+                    extra_demand,
+                    max(0, available - team_sold[cid]),
+                    remaining,
+                )
+                team_sold[cid] += extra_sold
+                remaining -= extra_sold
+                if remaining <= 0:
+                    break
+
+    for cid, _, m_dec in contestants:
+        sold = team_sold[cid]
+        # Revenue is recorded in base currency: an export-market price quoted
+        # in foreign currency is divided by the FX rate.
+        revenue_base = sold * m_dec.price / fx
+        # Mark these units committed so a later market sees reduced inventory.
+        committed[cid][product_id] = committed[cid].get(product_id, 0) + sold
+        _record_sale(
+            scratches[cid],
+            product_id,
+            market.id,
+            sold,
+            revenue_base,
+            sold * market.transport_cost_per_unit,
+        )
 
 
 def _company_attractiveness(
@@ -722,18 +1058,17 @@ def _company_attractiveness(
     product_id: str,
     m_dec,
     market,
+    fx: float = 1.0,
 ) -> float:
     """Multinomial attraction score for one company on one product/market.
 
     Implements `docs/spec/01-sales.md` §2.1, scored against the cohort.
     Returns a positive float; the caller normalises by the sum across teams.
 
-    For the *price reference*, we use the cohort's average price in the
-    *current period* (cohort comparison), computed by `_settle_market` itself
-    via the multinomial structure: A(c) is built so that all components are
-    naturally relative to "neutral" (i.e. 1.0 = matches the cohort centre).
-    Here, each *factor* uses the company's own value against a benchmark; the
-    multinomial normalisation in `_settle_market` does the rest.
+    `fx` is the market's currency rate (units of market currency per base
+    unit). The team's price is converted to base currency before it is
+    compared with the base-currency anchor, so the home and export markets
+    are scored on the same scale.
     """
 
     coeffs = market.coefficients
@@ -742,14 +1077,15 @@ def _company_attractiveness(
     # We score factors against neutral reference values: price uses a
     # scenario-set anchor, advertising/sf use the saturation references,
     # indices use 100.
-    # TODO(v0.2.x): move PRICE_ANCHOR into the market/product spec rather
+    # TODO(v0.3): move PRICE_ANCHOR into the market/product spec rather
     # than hard-coding it here.
-    PRICE_ANCHOR = 2_800.0  # solar-v1 panel_gen1 retail anchor
+    PRICE_ANCHOR = 2_800.0  # solar-v1 panel_gen1 retail anchor (base currency)
     REF_INDEX = 100.0
 
+    price_in_base = m_dec.price / fx if fx else m_dec.price
     price_factor = (
-        (PRICE_ANCHOR / m_dec.price) ** coeffs.beta_price
-        if m_dec.price > 0
+        (PRICE_ANCHOR / price_in_base) ** coeffs.beta_price
+        if price_in_base > 0
         else 1.0
     )
     ads_eff = (
@@ -1035,10 +1371,9 @@ def _articulate(
     )
 
     # Investing
-    # v0.1: no new line purchases yet (we don't process them in production)
-    line_purchases = 0.0
+    line_purchases = scratch.line_purchases
     env_tech_purchases = decision.production.environmental_capex
-    disinvestment_proceeds = 0.0
+    disinvestment_proceeds = scratch.disinvestment_proceeds
     securities_purchases = decision.finance.securities_purchase
     securities_maturities = company_before.securities
 
@@ -1414,9 +1749,12 @@ def build_initial_state(
             motivation_index=cs0.motivation_index,
             competence_index=cs0.competence_index,
             process_optimisation_index=cs0.process_optimisation_index,
+            adaptation_index=1.0,
             image_index=cs0.image_index,
             satisfaction_index=cs0.satisfaction_index,
             rating_index=cs0.rating_index,
+            productivity_index_i=1.0,
+            last_period_revenue=cs0.last_period_revenue,
             land_and_buildings_nbv=land_and_buildings_nbv,
         )
         companies.append(company)

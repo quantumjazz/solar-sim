@@ -313,6 +313,232 @@ def test_period_event_wage_changes_flow_through(pack):
     assert new_state.companies[0].cost_centres["production"].salary_per_capita == 31_000
 
 
+def test_productivity_responds_to_training(pack):
+    """Training and process-optimisation spend should raise Productivity Index I."""
+    from sim_engine.engine import build_initial_state
+
+    state_0 = build_initial_state(pack, company_ids=["Trained", "Neglected"])
+    common = dict(
+        price=2_900, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=1_500_000, value_analysis_spend=800_000,
+        order_units=42_000, target_volume=44_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=15_000_000, dividend=0,
+    )
+    trained = _build_decision(
+        team_id="Trained", period=1,
+        training_per_employee=3_000, process_optimisation_spend=3_000_000, **common
+    )
+    neglected = _build_decision(
+        team_id="Neglected", period=1,
+        training_per_employee=0, process_optimisation_spend=0, **common
+    )
+    new_state, _ = run_period(
+        state_0, {"Trained": trained, "Neglected": neglected}, pack
+    )
+
+    c_trained = new_state.company("Trained")
+    c_neglected = new_state.company("Neglected")
+
+    # Training raises competence; neglect lets it decay below 1.0
+    assert c_trained.competence_index > 1.0
+    assert c_neglected.competence_index < 1.0
+    # Process-opt spend raises that index; neglect lets it decay
+    assert c_trained.process_optimisation_index > c_neglected.process_optimisation_index
+    # Overall Productivity Index I is higher for the trained company
+    assert c_trained.productivity_index_i > c_neglected.productivity_index_i
+
+
+def test_auto_scaled_cost_centres(pack):
+    """Purchasing and administration headcount should track revenue."""
+    from sim_engine.engine import build_initial_state
+
+    state_0 = build_initial_state(pack)
+    decision = _build_decision(
+        team_id="c1", period=1,
+        price=2_800, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=2_500_000, value_analysis_spend=1_000_000,
+        order_units=30_000, target_volume=40_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=30_000_000, dividend=0,
+    )
+    new_state, _ = run_period(state_0, {"c1": decision}, pack)
+    c = new_state.companies[0]
+    # With ~130 mEUR prior revenue: purchasing ~18, admin ~202 (sane ranges)
+    assert 10 <= c.cost_centres["purchasing"].headcount <= 25
+    assert 150 <= c.cost_centres["administration"].headcount <= 280
+
+
+def test_multi_period_articulation(pack):
+    """Run three periods back-to-back; the balance sheet must articulate each time."""
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack)
+    for period in (1, 2, 3):
+        decision = _build_decision(
+            team_id="c1", period=period,
+            price=2_900, advertising=6_000_000, sales_force=100,
+            researchers=34, sustainability_spend=2_000_000, value_analysis_spend=1_000_000,
+            order_units=42_000, target_volume=44_000, maintenance_spend_per_line=1_000_000,
+            production_workforce_change=0, training_per_employee=800,
+            process_optimisation_spend=1_000_000, non_salary_pct=0.40,
+            pension_reserve_pct=0.05, short_term_loan=20_000_000, dividend=0,
+        )
+        state, reports = run_period(state, {"c1": decision}, pack)
+        assert reports["c1"].balance_sheet.articulates, f"period {period} BS broke"
+        assert reports["c1"].cash_flow.articulates, f"period {period} CF broke"
+    assert state.period_index == 3
+
+
+def test_bulk_buyer_channel(pack):
+    """A team that accepts the period-1 bulk offer sells through the bulk channel."""
+    from sim_engine.engine import build_initial_state
+    from sim_engine.decisions import BulkBuyerAcceptance
+
+    state_0 = build_initial_state(pack, company_ids=["A", "B"])
+    common = dict(
+        price=2_900, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=1_500_000, value_analysis_spend=800_000,
+        order_units=45_000, target_volume=47_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=20_000_000, dividend=0,
+    )
+    dec_a = _build_decision(team_id="A", period=1, **common)
+    dec_a.sales.by_product[0].bulk_buyer = BulkBuyerAcceptance(
+        accept_offer=True, bid_units=5000
+    )
+    dec_b = _build_decision(team_id="B", period=1, **common)  # no bulk acceptance
+
+    _, reports = run_period(state_0, {"A": dec_a, "B": dec_b}, pack)
+
+    channels_a = {ln.market_id: ln.units_sold for ln in reports["A"].market.by_market}
+    channels_b = {ln.market_id: ln.units_sold for ln in reports["B"].market.by_market}
+
+    # A sold via the bulk channel (capped at the 5 000-unit offer); B did not.
+    assert channels_a.get("bulk", 0) == 5000
+    assert "bulk" not in channels_b
+    assert reports["A"].balance_sheet.articulates
+
+
+def test_tender_lowest_bid_wins(pack):
+    """In a tender, the lowest valid bid wins and supplies the required units."""
+    from sim_engine.engine import build_initial_state
+    from sim_engine.decisions import TenderBid
+
+    # Run period 1 first (a plain period), then bid on the period-2 tender.
+    state_0 = build_initial_state(pack, company_ids=["A", "B"])
+    common = dict(
+        price=2_900, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=1_500_000, value_analysis_spend=800_000,
+        order_units=45_000, target_volume=47_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=20_000_000, dividend=0,
+    )
+    state_1, _ = run_period(
+        state_0,
+        {
+            "A": _build_decision(team_id="A", period=1, **common),
+            "B": _build_decision(team_id="B", period=1, **common),
+        },
+        pack,
+    )
+
+    # Period 2 has a 3 000-unit tender. A bids 2 600, B bids 2 750 — A wins.
+    dec_a = _build_decision(team_id="A", period=2, **common)
+    dec_a.sales.by_product[0].tender = TenderBid(bid_price=2_600, bid_units=3000)
+    dec_b = _build_decision(team_id="B", period=2, **common)
+    dec_b.sales.by_product[0].tender = TenderBid(bid_price=2_750, bid_units=3000)
+
+    _, reports = run_period(state_1, {"A": dec_a, "B": dec_b}, pack)
+
+    channels_a = {ln.market_id: ln.units_sold for ln in reports["A"].market.by_market}
+    channels_b = {ln.market_id: ln.units_sold for ln in reports["B"].market.by_market}
+
+    assert channels_a.get("tender", 0) == 3000, "low bidder A should win the tender"
+    assert "tender" not in channels_b, "high bidder B should not win"
+    assert reports["A"].balance_sheet.articulates
+    assert reports["B"].balance_sheet.articulates
+
+
+def test_line_investment_grows_capacity(pack):
+    """Buying production lines should increase capacity and cost cash."""
+    from sim_engine.engine import build_initial_state
+
+    state_0 = build_initial_state(pack)
+    decision = _build_decision(
+        team_id="c1", period=1,
+        price=2_900, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=1_500_000, value_analysis_spend=800_000,
+        order_units=70_000, target_volume=75_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=300, training_per_employee=600,
+        process_optimisation_spend=500_000, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=80_000_000, dividend=0,
+    )
+    decision.production.lines.invest.counts = {"fullauto_v3": 3}
+
+    new_state, reports = run_period(state_0, {"c1": decision}, pack)
+    company = new_state.companies[0]
+
+    # Started with 4 lines; bought 3 → 7
+    assert len(company.lines) == 7
+    # Cash flow shows the purchase (3 × 30 mEUR = 90 mEUR)
+    assert reports["c1"].cash_flow.production_line_purchases == 90_000_000
+    # Articulation still holds with the capital movement
+    assert reports["c1"].balance_sheet.articulates
+    assert reports["c1"].cash_flow.articulates
+
+
+def test_market_2_opens_in_period_3_with_fx(pack):
+    """market_2 (export, FX) settles from period 3, converting revenue to base."""
+    from sim_engine.engine import build_initial_state
+    from sim_engine.decisions import SalesPerMarketDecision
+
+    state = build_initial_state(pack)  # single company
+
+    def plain(period):
+        return _build_decision(
+            team_id="c1", period=period,
+            price=2_900, advertising=6_000_000, sales_force=100,
+            researchers=34, sustainability_spend=1_500_000, value_analysis_spend=800_000,
+            order_units=42_000, target_volume=44_000, maintenance_spend_per_line=1_000_000,
+            production_workforce_change=0, training_per_employee=600,
+            process_optimisation_spend=500_000, non_salary_pct=0.40,
+            pension_reserve_pct=0.05, short_term_loan=20_000_000, dividend=0,
+        )
+
+    for period in (1, 2):
+        state, _ = run_period(state, {"c1": plain(period)}, pack)
+
+    # Give the company a large finished-goods stock so surplus can reach
+    # market_2 after market_1 (which has delivery priority) takes its share.
+    # The injection is balanced by an equal rise in retained earnings, so the
+    # period-3 opening balance sheet still articulates. This isolates the
+    # market_2 settlement logic from the production-capacity constraint.
+    inv = state.companies[0].inventories_finished["panel_gen1"]
+    extra_units = 300_000
+    inv.units += extra_units
+    state.companies[0].retained_earnings += extra_units * inv.unit_value
+
+    dec = plain(3)
+    dec.sales.by_product[0].market_2 = SalesPerMarketDecision(
+        price=3_000, advertising=3_000_000, sales_force=40
+    )
+    new_state, reports = run_period(state, {"c1": dec}, pack)
+
+    channels = {ln.market_id: ln for ln in reports["c1"].market.by_market}
+    assert "market_2" in channels, "market_2 should settle from period 3"
+    m2 = channels["market_2"]
+    assert m2.units_sold > 0
+    # FX: a 3 000-USD price converts to 3000 / 1.10 ≈ 2 727 EUR of base revenue
+    effective_base_price = m2.revenue / m2.units_sold
+    assert abs(effective_base_price - 3_000 / 1.10) < 1.0
+    assert reports["c1"].balance_sheet.articulates
+    assert reports["c1"].cash_flow.articulates
+
+
 def test_determinism(state_0, default_decision_p1, pack):
     """Same inputs should yield identical reports."""
     s1a, r1a = run_period(state_0, default_decision_p1, pack)

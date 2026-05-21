@@ -137,12 +137,15 @@ class CompanyStateInitial(BaseModel):
     equity: CompanyEquityInitial
     trade_receivables_from_prior: float = 0
     cost_centres: Dict[str, CostCentreInitial]
-    motivation_index: float = 100
-    competence_index: float = 100
-    process_optimisation_index: float = 100
+    motivation_index: float = 80          # 100-scale; companies often start low
+    competence_index: float = 1.0         # factor-scale, centred at 1.00
+    process_optimisation_index: float = 1.0
     image_index: float = 100
     satisfaction_index: float = 100
     rating_index: float = 70
+    # Revenue the inherited company achieved in its last fiscal year — used
+    # to auto-scale the purchasing and administration cost centres in period 1.
+    last_period_revenue: float = 0
     # Land and buildings (net book value at period 0). Manufacturing companies
     # of this scale typically have significant property/plant on the balance
     # sheet; we set this explicitly to keep the inherited balance sheet

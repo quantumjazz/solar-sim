@@ -69,6 +69,9 @@ class ProductState(BaseModel):
     sustainability_index: float
     value_analysis_index: float
     cumulative_units_produced: float = 0
+    # Productivity Index II — the learning-curve multiplier. Starts at 1.00
+    # and rises as cumulative production grows (see docs/spec/04-hr.md §4.2).
+    productivity_index_ii: float = 1.0
 
 
 class BalanceSheet(BaseModel):
@@ -167,13 +170,25 @@ class CompanyState(BaseModel):
     inventories_finished: Dict[str, InventoryRecord]   # keyed by product_id
     lines: List[ProductionLineState]
 
-    # Slow-moving indices
+    # Slow-moving indices.
+    #   motivation_index: 100-scale (period 0 typically 80; clipped [50, 150])
+    #   competence_index, process_optimisation_index, adaptation_index:
+    #     factor-scale, centred at 1.00
     motivation_index: float
     competence_index: float
     process_optimisation_index: float
+    adaptation_index: float = 1.0
     image_index: float
     satisfaction_index: float
     rating_index: float
+
+    # Productivity Index I — the within-period productivity multiplier,
+    # recomputed each period from the four indices above.
+    productivity_index_i: float = 1.0
+
+    # Revenue realised in the previous period — drives auto-scaled headcount
+    # for the purchasing and administration cost centres.
+    last_period_revenue: float = 0
 
     # Tax loss carryforward (separate ledger)
     loss_carryforward: float = 0
