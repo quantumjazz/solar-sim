@@ -137,4 +137,23 @@ def validate_decision(
     non_negative(decision.finance.securities_purchase, "securities purchase")
     non_negative(decision.finance.dividend, "dividend")
 
+    # --- Product launch gates ---------------------------------------------
+    # A product may exist for R&D before its launch period, but cannot be
+    # produced or sold until then.
+    launch_period = {p.id: p.first_launch_period for p in ctx.products}
+    for sd in decision.sales.by_product:
+        lp = launch_period.get(sd.product)
+        if lp is not None and lp > ctx.period and (sd.market_1 or sd.market_2):
+            errors.append(
+                f"{sd.product} cannot be sold before period {lp} "
+                f"(pre-launch development only)"
+            )
+    for pp in decision.production.by_product:
+        lp = launch_period.get(pp.product)
+        if lp is not None and lp > ctx.period and pp.target_volume > 0:
+            errors.append(
+                f"{pp.product} cannot be produced before period {lp} "
+                f"(pre-launch development only)"
+            )
+
     return errors

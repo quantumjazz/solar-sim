@@ -5,8 +5,10 @@ set in the **solar PV and energy-storage** industry.
 
 > **Status:** Engine and instructor console working. Mechanics spec +
 > scenario pack (Phase 0), multi-team Python engine with full P&L/balance-
-> sheet/cash-flow articulation (Phases 1–2), and a Streamlit instructor
-> console for running a cohort. 23 tests pass (20 engine + 3 app).
+> sheet/cash-flow articulation, successor products (Gen-2 panel, battery
+> storage, balcony solar) with R&D development and a coexistence handover,
+> and a Streamlit instructor console for running a cohort.
+> 27 tests pass (23 engine + 4 app).
 > **Public name:** TBD. The directory name `solar-sim` is a placeholder.
 
 ## Quick start

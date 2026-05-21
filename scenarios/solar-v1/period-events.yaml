@@ -165,7 +165,8 @@ events:
     market_changes:
       market_1:
         market_potential_units:
-          panel_gen1: 234_000                # −10 %
+          panel_gen1: 180_000                # panel demand splits as Gen-2 launches
+          panel_gen2: 80_000                 # Gen-2 launchable this period
       market_2:
         market_potential_units:
           panel_gen1: 30_000                 # +20 %
@@ -211,7 +212,10 @@ events:
     market_changes:
       market_1:
         market_potential_units:
-          panel_gen1: 210_000                # −10 %
+          panel_gen1: 120_000                # Gen-1 fading
+          panel_gen2: 150_000                # Gen-2 now the larger panel segment
+          storage_box: 30_000                # storage launchable this period
+          balcony_solar: 50_000              # balcony segment opens
       market_2:
         market_potential_units:
           panel_gen1: 30_000                 # flat
@@ -260,7 +264,10 @@ events:
     market_changes:
       market_1:
         market_potential_units:
-          panel_gen1: 220_000                # modest recovery
+          panel_gen1: 80_000                 # Gen-1 nearly phased out
+          panel_gen2: 190_000
+          storage_box: 45_000
+          balcony_solar: 70_000
       market_2:
         market_potential_units:
           panel_gen1: 22_000                 # FX hits
@@ -291,7 +298,10 @@ events:
     market_changes:
       market_1:
         market_potential_units:
-          panel_gen1: 225_000
+          panel_gen1: 50_000
+          panel_gen2: 220_000
+          storage_box: 60_000
+          balcony_solar: 95_000
       market_2:
         market_potential_units:
           panel_gen1: 24_000                 # +10 %
@@ -319,9 +329,10 @@ events:
     market_changes:
       market_1:
         market_potential_units:
-          panel_gen1: 220_000
-        # Storage and balcony market sizes come from product-specific potentials,
-        # populated by the engine from product unlocks.
+          panel_gen1: 30_000
+          panel_gen2: 240_000
+          storage_box: 75_000
+          balcony_solar: 120_000
       market_2:
         market_potential_units:
           panel_gen1: 28_000                 # +17 %
@@ -338,6 +349,16 @@ events:
       wage_growth: 0.015
       sentiment: "steady"
     parameter_changes: {}                    # no surprises in the scoring period
+    market_changes:
+      market_1:
+        market_potential_units:
+          panel_gen1: 20_000                 # Gen-1 all but retired
+          panel_gen2: 250_000
+          storage_box: 90_000
+          balcony_solar: 140_000
+      market_2:
+        market_potential_units:
+          panel_gen1: 28_000
     notable_events:
       - type: scoring_period
         note: "Equity at end of this period is the grade input."

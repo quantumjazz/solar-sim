@@ -285,6 +285,9 @@ def _pre_market_phase(
 
     new_company = company.model_copy(deep=True)
 
+    # 0. Materialise any products that have just become available
+    _materialise_products(new_company, ctx)
+
     # 1. R&D — index dynamics
     _apply_rnd(new_company, decision, pack, ctx)
 
@@ -366,8 +369,39 @@ def _post_market_phase(
 
 
 # ---------------------------------------------------------------------------
-# Rule modules — v0.1 simplified
+# Rule modules
 # ---------------------------------------------------------------------------
+
+
+def _materialise_products(
+    company: CompanyState, ctx: ResolvedPeriodContext
+) -> None:
+    """Add ProductState + inventories for products that have become available.
+
+    A product appears in a company's state from its `available_from_period`,
+    seeded with the scenario's pre-launch index values. From that period R&D
+    can develop it; it becomes producible / sellable from its launch period
+    (see docs/spec/02-rnd.md §5).
+    """
+    for spec in ctx.products:
+        if spec.available_from_period > ctx.period:
+            continue
+        if spec.id in company.products:
+            continue
+        company.products[spec.id] = ProductState(
+            product_id=spec.id,
+            efficiency_index=spec.indices.efficiency,
+            sustainability_index=spec.indices.sustainability,
+            value_analysis_index=spec.indices.value_analysis,
+        )
+        company.inventories_materials[spec.id] = InventoryRecord(
+            units=spec.initial_inventory.input_material_units,
+            unit_value=spec.initial_inventory.input_material_unit_value,
+        )
+        company.inventories_finished[spec.id] = InventoryRecord(
+            units=spec.initial_inventory.finished_goods_units,
+            unit_value=spec.initial_inventory.finished_goods_unit_value,
+        )
 
 
 def _apply_rnd(
@@ -726,9 +760,16 @@ def _apply_production(
     prod_cc = company.cost_centres["production"]
     spec_by_id = {p.id: p for p in ctx.products}
 
+    # A product can only be produced from its launch period.
+    def _producible(product_id: str) -> bool:
+        spec = spec_by_id.get(product_id)
+        return spec is not None and spec.first_launch_period <= ctx.period
+
     # Capacity-weighted shares so multiple products split the line capacity.
     weighted_targets: Dict[str, float] = {}
     for p_dec in decision.production.by_product:
+        if not _producible(p_dec.product):
+            continue
         spec = spec_by_id[p_dec.product]
         weighted_targets[p_dec.product] = (
             p_dec.target_volume * spec.capacity_per_line_unit
@@ -736,6 +777,9 @@ def _apply_production(
     total_weighted = sum(weighted_targets.values())
 
     for p_dec in decision.production.by_product:
+        if not _producible(p_dec.product):
+            scratch.units_produced[p_dec.product] = 0.0
+            continue
         spec = spec_by_id[p_dec.product]
         product_state = company.products[p_dec.product]
 
@@ -876,8 +920,10 @@ def _settle_market(
         scratches[cid].revenue = {}
         scratches[cid].transport_cost = {}
 
+    # Only launchable products can be sold (a product may exist for R&D from
+    # an earlier period but not yet be sellable).
     active_product_ids = [
-        p.id for p in ctx.products if p.available_from_period <= ctx.period
+        p.id for p in ctx.products if p.first_launch_period <= ctx.period
     ]
 
     # committed[cid][product_id] = units already sold via tender + bulk.

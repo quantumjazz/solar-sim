@@ -92,6 +92,7 @@ def team_decision_form(
     team_id: str,
     period: int,
     product_ids: List[str],
+    launchable_product_ids: List[str],
     catalog_types: List[str],
     defaults: TeamDecision,
     market_2_open: bool,
@@ -99,6 +100,11 @@ def team_decision_form(
     tender_products: List[str],
 ) -> TeamDecision:
     """Render the decision inputs for one team; return a TeamDecision.
+
+    `product_ids` are the products that exist this period (R&D possible).
+    `launchable_product_ids` are the subset that can also be produced and
+    sold; a product that is available but not yet launchable is shown with
+    R&D inputs only.
 
     `defaults` pre-fills every field (the team's previous decision, or a
     `default_decision` for period 1). `bulk_offer_products` / `tender_products`
@@ -119,10 +125,41 @@ def team_decision_form(
     pur_by_product: List[PurchasingByProductDecision] = []
     prod_by_product: List[ProductionByProductDecision] = []
 
+    def render_rnd(pid: str) -> None:
+        """Render the three R&D inputs for a product and record the decision."""
+        rd = rnd_def.get(pid)
+        e1, e2, e3 = st.columns(3)
+        researchers = e1.number_input(
+            "R&D headcount", min_value=0, step=5,
+            value=int(rd.researchers) if rd else 0, key=k(f"{pid}_rnd_staff"),
+        )
+        sus = e2.number_input(
+            "Sustainability spend (€)", min_value=0.0, step=500_000.0,
+            value=float(rd.sustainability_spend) if rd else 0.0,
+            key=k(f"{pid}_rnd_sus"),
+        )
+        val = e3.number_input(
+            "Value-analysis spend (€)", min_value=0.0, step=250_000.0,
+            value=float(rd.value_analysis_spend) if rd else 0.0,
+            key=k(f"{pid}_rnd_val"),
+        )
+        rnd_by_product.append(
+            RnDByProductDecision(
+                product=pid, researchers=researchers,
+                sustainability_spend=sus, value_analysis_spend=val,
+            )
+        )
+
     for pid in product_ids:
+        # A product that exists but is not yet launchable: R&D only.
+        if pid not in launchable_product_ids:
+            st.markdown(f"##### Product — {pid}  ·  pre-launch development")
+            st.caption("Not launchable yet — R&D only this period.")
+            render_rnd(pid)
+            continue
+
         st.markdown(f"##### Product — {pid}")
         sd = sales_def.get(pid)
-        rd = rnd_def.get(pid)
         pd = pur_def.get(pid)
         ppd = prod_def.get(pid)
 
@@ -209,37 +246,17 @@ def team_decision_form(
         )
 
         # --- R&D ---
-        e1, e2, e3 = st.columns(3)
-        researchers = e1.number_input(
-            "R&D headcount", min_value=0, step=5,
-            value=int(rd.researchers) if rd else 34, key=k(f"{pid}_rnd_staff"),
-        )
-        sus = e2.number_input(
-            "Sustainability spend (€)", min_value=0.0, step=500_000.0,
-            value=float(rd.sustainability_spend) if rd else 2_000_000.0,
-            key=k(f"{pid}_rnd_sus"),
-        )
-        val = e3.number_input(
-            "Value-analysis spend (€)", min_value=0.0, step=250_000.0,
-            value=float(rd.value_analysis_spend) if rd else 1_000_000.0,
-            key=k(f"{pid}_rnd_val"),
-        )
-        rnd_by_product.append(
-            RnDByProductDecision(
-                product=pid, researchers=researchers,
-                sustainability_spend=sus, value_analysis_spend=val,
-            )
-        )
+        render_rnd(pid)
 
         # --- Purchasing & production ---
         f1, f2 = st.columns(2)
         order_units = f1.number_input(
             "Input material to order (units)", min_value=0, step=1_000,
-            value=int(pd.order_units) if pd else 42_000, key=k(f"{pid}_order"),
+            value=int(pd.order_units) if pd else 0, key=k(f"{pid}_order"),
         )
         target = f2.number_input(
             "Production target (units)", min_value=0, step=1_000,
-            value=int(ppd.target_volume) if ppd else 44_000, key=k(f"{pid}_target"),
+            value=int(ppd.target_volume) if ppd else 0, key=k(f"{pid}_target"),
         )
         pur_by_product.append(
             PurchasingByProductDecision(product=pid, order_units=order_units)

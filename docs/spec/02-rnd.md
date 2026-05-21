@@ -156,40 +156,65 @@ sum of per-product changes.
 
 ## 5. Product launches and pre-launch development
 
-A successor product (e.g., `panel_gen2`) typically becomes *available* in a
-later period than the period of game start. Before its `available_from_period`,
-teams can invest in its indices — this is **pre-launch development**.
+A successor product (e.g., `panel_gen2`) has two availability gates:
 
-During pre-launch:
+- `available_from_period` — from this period the product exists in each
+  company's state, seeded with the scenario's pre-launch index values, and
+  R&D can develop it (**pre-launch development**).
+- `launchable_from_period` — from this period the product can be produced
+  and sold.
+
+During pre-launch (`available` but not yet `launchable`):
 
 - The product's indices accumulate normally per the dynamics above.
-- The product cannot be produced or sold.
+- The product cannot be produced or sold (the engine rejects a production
+  target or a sales decision for it).
 - R&D spend on it appears in the P&L normally.
 
-At launch (the team decides to launch in the first period the product is
-available, or later):
+At launch (the first period the team chooses to produce the product, on or
+after `launchable_from_period`):
 
-- Inventory of any *replaced* prior-generation product is treated as discontinued
-  (see `06-accounting.md` §3.4 — extraordinary expense at production cost).
-- Won tenders from prior periods committed in the old generation can be
-  fulfilled by the new generation.
 - The new generation's starting indices reflect the cumulative R&D up to launch.
+- The product competes in its own market (the scenario gives the successor
+  its own market potential).
 
-### 5.1 Index thresholds for launch
+### 5.0 Generation handover — the coexistence model
 
-The scenario can specify *minimum index values* for a product to launch
-without market penalty. From the solar-v1 narrative:
+When a successor `replaces` a prior generation (e.g., `panel_gen2` replaces
+`panel_gen1`), the two generations **coexist**: each is a distinct product
+with its own market potential. The scenario's period events ramp the old
+generation's market potential *down* and the successor's *up* over the
+handover periods.
 
-```
-panel_gen2:
-  launch_min_indices:
-    efficiency: 100      # at least matching the old product
-    sustainability: 100  # market expects modern sustainability
-```
+There is **no forced scrapping** of the old generation's inventory at
+launch. A team sells its remaining old-generation stock into the (shrinking)
+old market while it ramps the successor, then stops producing the old
+generation when its market no longer justifies it. The strategic "when do I
+switch" pressure comes from the market ramp, not from a penalty.
 
-A team can launch below these thresholds, but suffers a one-period
-**bad-launch penalty** on `product_score` (see `01-sales.md` §2.1.4) until
-the indices recover.
+> *Design note.* TOPSIM-style simulations force the old product out of a
+> single shared market at launch (scrapping leftover stock as an
+> extraordinary expense). This engine instead models each generation as a
+> separate product with its own market, which makes the transition smooth
+> and leaves no market unserved. A shared-segment market (one "panel"
+> potential contested by both generations) is a possible future refinement.
+
+`replaces` is therefore metadata: it documents the lineage and can drive UI
+grouping, but it triggers no automatic engine behaviour in this version.
+
+### 5.1 Launching with weak indices
+
+There is **no explicit bad-launch penalty** in this version. A team can
+launch a successor at any index level; the multinomial attraction model
+(`01-sales.md` §2) already penalises it naturally — a low-index product
+gets a low `product_score`, hence a low share. Developing the successor
+adequately *before* launch is rewarded by the model itself, without a
+special-case rule.
+
+> *Future refinement.* An explicit threshold (e.g. a one-period extra
+> `product_score` penalty for launching below scenario-set
+> `launch_min_indices`) could sharpen the "develop before you launch"
+> decision. It is deliberately omitted here to keep the launch rule simple.
 
 ---
 

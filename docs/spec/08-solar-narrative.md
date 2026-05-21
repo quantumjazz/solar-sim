@@ -58,20 +58,28 @@ In the narrative voice: "the workhorse that built the company".
 
 ### 2.2 `panel_gen2` — High-Efficiency Mono-PERC Panel (Gen 2)
 
-A successor product. 440 W, monocrystalline PERC technology, higher
-efficiency, slightly higher manufacturing cost but better sales per unit.
+A successor product. Higher-efficiency mono-PERC technology, slightly lower
+manufacturing cost than gen1, better sales per unit.
 
-Pre-launch indices (period 3): efficiency 85, sustainability 45, value-analysis 90.
+Available for R&D development from period 2 (`available_from_period: 2`),
+launchable from period 4 (`launchable_from_period: 4`). Pre-launch indices
+at unlock: efficiency 85, sustainability 45, value-analysis 90 — well below
+gen1's, so the team must invest R&D over periods 2–3 to make it competitive.
 
-To launch without bad-launch penalty: indices must reach at least 100 / 100 / 90.
+**Generation handover — coexistence.** `panel_gen2` `replaces` `panel_gen1`,
+but the two coexist as separate products with separate market potentials.
+The scenario's period events ramp the gen1 market *down* and the gen2
+market *up* across periods 4–9. There is no forced scrapping of gen1
+inventory: a team sells down its remaining gen1 stock into the shrinking
+gen1 market while it ramps gen2, and chooses when to stop producing gen1.
 
-**Launching gen2 replaces gen1 in the market.** Finished-goods inventory
-of gen1 is scrapped at production cost (extraordinary expense). Input
-material inventory can be used for gen2 production. Won tenders for gen1
-can be fulfilled with gen2.
+A team that launches gen2 with weak indices is not hit with an explicit
+penalty — the attraction model simply gives a low-index product a low
+product score and therefore a low share. Developing gen2 enough *before*
+launching is rewarded by the model itself.
 
-The narrative emphasises: this is not just a technology refresh, it is a
-*generational handover*. Plan inventory carefully.
+The narrative emphasises: this is a *generational handover*. The pressure
+to switch comes from the market — the gen1 segment is fading.
 
 ### 2.3 `storage_box` — Residential Battery Storage System
 

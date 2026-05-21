@@ -150,7 +150,12 @@ def test_scenario_loads(pack):
     assert pack.pack.scenario.id == "solar-v1"
     assert pack.pack.scenario.version == "0.1.0"
     assert len(pack.events) == 9
-    assert {p.id for p in pack.pack.products} == {"panel_gen1"}
+    assert {p.id for p in pack.pack.products} == {
+        "panel_gen1",
+        "panel_gen2",
+        "storage_box",
+        "balcony_solar",
+    }
 
 
 def test_initial_state(state_0):
@@ -630,6 +635,158 @@ def test_industry_report(pack):
     # Market shares sum to ~100%
     total_share = sum(c.market_share_pct for c in industry_a.companies)
     assert abs(total_share - 100.0) < 0.01
+
+
+def test_full_playthrough_nine_periods(pack):
+    """Run a 2-team cohort through all 9 periods; articulation must hold each time.
+
+    De-risks the later-period scenario events (period-5 environmental law,
+    period-6 tax hike + remediation charge, FX swings) — a bug there would
+    only surface in a full run, which the shorter tests never reach.
+    """
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["A", "B"])
+
+    for period in range(1, 10):
+        decisions = {}
+        for tid in ("A", "B"):
+            decisions[tid] = _build_decision(
+                team_id=tid, period=period,
+                price=2_900, advertising=6_000_000, sales_force=110,
+                researchers=40, sustainability_spend=2_000_000,
+                value_analysis_spend=1_000_000,
+                order_units=44_000, target_volume=46_000,
+                maintenance_spend_per_line=1_000_000,
+                production_workforce_change=0, training_per_employee=800,
+                process_optimisation_spend=1_000_000,
+                non_salary_pct=0.40, pension_reserve_pct=0.05,
+                short_term_loan=30_000_000, dividend=0,
+            )
+        state, reports = run_period(state, decisions, pack)
+        assert state.period_index == period
+        for tid in ("A", "B"):
+            assert reports[tid].balance_sheet.articulates, (
+                f"period {period}, team {tid}: balance sheet broke"
+            )
+            assert reports[tid].cash_flow.articulates, (
+                f"period {period}, team {tid}: cash flow broke"
+            )
+            assert reports[tid].industry is not None
+
+    assert state.period_index == 9
+
+
+def _develop_gen2(decision, researchers, sustainability, value_analysis):
+    """Append a panel_gen2 R&D entry to a decision."""
+    from sim_engine.decisions import RnDByProductDecision
+
+    decision.rnd.by_product.append(
+        RnDByProductDecision(
+            product="panel_gen2",
+            researchers=researchers,
+            sustainability_spend=sustainability,
+            value_analysis_spend=value_analysis,
+        )
+    )
+    return decision
+
+
+def test_successor_product_lifecycle(pack):
+    """panel_gen2 materialises at period 2, develops via R&D, sells from period 4."""
+    from sim_engine.engine import build_initial_state
+    from sim_engine.decisions import (
+        ProductionByProductDecision,
+        PurchasingByProductDecision,
+        SalesByProductDecision,
+        SalesPerMarketDecision,
+    )
+
+    state = build_initial_state(pack, company_ids=["c1"])
+
+    def base(period, **kw):
+        params = dict(
+            price=2_900, advertising=6_000_000, sales_force=110, researchers=34,
+            sustainability_spend=2_000_000, value_analysis_spend=1_000_000,
+            order_units=42_000, target_volume=44_000,
+            maintenance_spend_per_line=1_000_000, production_workforce_change=0,
+            training_per_employee=800, process_optimisation_spend=1_000_000,
+            non_salary_pct=0.40, pension_reserve_pct=0.05,
+            short_term_loan=30_000_000, dividend=0,
+        )
+        params.update(kw)
+        return _build_decision(team_id="c1", period=period, **params)
+
+    # Period 1 — panel_gen2 not yet available
+    state, _ = run_period(state, {"c1": base(1)}, pack)
+    assert "panel_gen2" not in state.companies[0].products
+
+    # Periods 2-3 — panel_gen2 materialises and is developed via R&D
+    for period in (2, 3):
+        decision = _develop_gen2(base(period), 220, 12_000_000, 3_000_000)
+        state, _ = run_period(state, {"c1": decision}, pack)
+    gen2 = state.companies[0].products["panel_gen2"]
+    assert "panel_gen2" in state.companies[0].products
+    assert gen2.efficiency_index > 85, "R&D should have raised gen2 efficiency"
+
+    # Period 4 — launch gen2: develop, buy materials, produce, sell
+    d4 = base(4, target_volume=8_000)  # scale gen1 back
+    _develop_gen2(d4, 120, 6_000_000, 2_000_000)
+    d4.purchasing.by_product.append(
+        PurchasingByProductDecision(product="panel_gen2", order_units=42_000)
+    )
+    d4.production.by_product.append(
+        ProductionByProductDecision(product="panel_gen2", target_volume=42_000)
+    )
+    d4.sales.by_product.append(
+        SalesByProductDecision(
+            product="panel_gen2",
+            market_1=SalesPerMarketDecision(
+                price=3_100, advertising=5_000_000, sales_force=60
+            ),
+        )
+    )
+    state, reports = run_period(state, {"c1": d4}, pack)
+    sold = {ln.product_id: ln.units_sold for ln in reports["c1"].market.by_market}
+    assert sold.get("panel_gen2", 0) > 0, "gen2 should sell once launched"
+    assert reports["c1"].balance_sheet.articulates
+    assert reports["c1"].cash_flow.articulates
+
+
+def test_producing_before_launch_period_rejected(pack):
+    """A production target for panel_gen2 before period 4 is rejected."""
+    from sim_engine.engine import build_initial_state
+    from sim_engine.decisions import ProductionByProductDecision
+    from sim_engine.validation import InvalidDecisionError
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    # Period 1 (a plain period) then period 2 where gen2 exists but is pre-launch.
+    d1 = _build_decision(
+        team_id="c1", period=1,
+        price=2_800, advertising=6_000_000, sales_force=100, researchers=34,
+        sustainability_spend=2_500_000, value_analysis_spend=1_000_000,
+        order_units=30_000, target_volume=40_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=30_000_000, dividend=0,
+    )
+    state, _ = run_period(state, {"c1": d1}, pack)
+
+    d2 = _build_decision(
+        team_id="c1", period=2,
+        price=2_800, advertising=6_000_000, sales_force=100, researchers=34,
+        sustainability_spend=2_500_000, value_analysis_spend=1_000_000,
+        order_units=30_000, target_volume=40_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=30_000_000, dividend=0,
+    )
+    # Try to produce gen2 in period 2 — it is not launchable until period 4.
+    d2.production.by_product.append(
+        ProductionByProductDecision(product="panel_gen2", target_volume=20_000)
+    )
+    with pytest.raises(InvalidDecisionError):
+        run_period(state, {"c1": d2}, pack)
 
 
 def test_determinism(state_0, default_decision_p1, pack):

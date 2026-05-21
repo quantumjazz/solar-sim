@@ -154,6 +154,84 @@ products:
       - { max_units: 70_000, unit_price: 900 }
       - { max_units: null,   unit_price: 850 }   # 70 000+
 
+  - id: panel_gen2
+    display_name: "High-Efficiency PV System Kit (Gen 2)"
+    category: pv_system
+    # Available for R&D development from period 2; launchable (produce & sell)
+    # from period 4. The successor to panel_gen1 — see `replaces`.
+    available_from_period: 2
+    launchable_from_period: 4
+    replaces: panel_gen1
+    # Pre-launch index values left by the prior board (period-2 unlock state).
+    indices:
+      efficiency: 85
+      sustainability: 45
+      value_analysis: 90
+    input_material_units_per_product: 1
+    factory_material_cost_per_unit: 40
+    capacity_per_line_unit: 0.9
+    production_capacity_per_person: 55
+    initial_inventory:
+      input_material_units: 0
+      input_material_unit_value: 0
+      finished_goods_units: 0
+      finished_goods_unit_value: 0
+    purchase_tiers:
+      - { max_units: 30_000, unit_price: 950 }
+      - { max_units: 50_000, unit_price: 830 }
+      - { max_units: 70_000, unit_price: 740 }
+      - { max_units: null,   unit_price: 690 }
+
+  - id: storage_box
+    display_name: "Residential Battery Storage System"
+    category: storage
+    # A new product category (not a replacement). R&D from period 3,
+    # launchable from period 5.
+    available_from_period: 3
+    launchable_from_period: 5
+    indices:
+      efficiency: 80
+      sustainability: 45
+      value_analysis: 90
+    input_material_units_per_product: 1
+    factory_material_cost_per_unit: 140
+    capacity_per_line_unit: 2.0          # a battery occupies twice the line time
+    production_capacity_per_person: 18   # complex assembly
+    initial_inventory:
+      input_material_units: 0
+      input_material_unit_value: 0
+      finished_goods_units: 0
+      finished_goods_unit_value: 0
+    purchase_tiers:
+      - { max_units: 20_000, unit_price: 2_250 }
+      - { max_units: 40_000, unit_price: 2_150 }
+      - { max_units: 60_000, unit_price: 2_050 }
+      - { max_units: null,   unit_price: 1_975 }
+
+  - id: balcony_solar
+    display_name: "Plug-in Balcony Solar Kit (mid-market)"
+    category: mid_market
+    available_from_period: 5
+    launchable_from_period: 5
+    indices:
+      efficiency: 100
+      sustainability: 100
+      value_analysis: 90
+    input_material_units_per_product: 1
+    factory_material_cost_per_unit: 10
+    capacity_per_line_unit: 0.5          # small unit, light line use
+    production_capacity_per_person: 100  # simple, fast assembly
+    initial_inventory:
+      input_material_units: 0
+      input_material_unit_value: 0
+      finished_goods_units: 0
+      finished_goods_unit_value: 0
+    purchase_tiers:
+      - { max_units: 20_000, unit_price: 320 }
+      - { max_units: 40_000, unit_price: 280 }
+      - { max_units: 60_000, unit_price: 260 }
+      - { max_units: null,   unit_price: 230 }
+
 # ---- Markets ----
 markets:
   - id: market_1
@@ -179,6 +257,9 @@ markets:
       ci_ref: 3_000_000
     market_potential_period_0:         # units
       panel_gen1: 215_000              # ~43 000 per company × 5 companies
+      panel_gen2: 0                    # ramps up from period 4 (see events)
+      storage_box: 0                   # ramps up from period 5
+      balcony_solar: 0                 # ramps up from period 5
 
   - id: market_2
     display_name: "Export (USD)"

@@ -42,15 +42,28 @@ Working:
 - **Three-phase period loop.** Pre-market (per company) → market settlement
   (across cohort) → post-market (per company).
 
+### v0.3 — successor products (current)
+
+- **Successor products.** `panel_gen2`, `storage_box`, and `balcony_solar`
+  materialise into company state at their `available_from_period` (seeded
+  with pre-launch indices), can be developed via R&D before launch, and
+  become producible / sellable from their `launchable_from_period`.
+- **Generation handover (coexistence model).** A successor and the product
+  it `replaces` coexist as separate products; the scenario ramps the old
+  generation's market down and the successor's up. No forced inventory
+  scrapping — see `docs/spec/02-rnd.md` §5.
+- **Launch gating.** Producing or selling a product before its launch
+  period is rejected by decision validation.
+
 Still simplified (explicit `TODO` markers in code):
 
-- **Successor-product launch** — `panel_gen2`, `storage_box`, `balcony_solar`
-  unlock in the scenario but launch mechanics (replacing a generation,
-  scrapping old inventory) are deferred to v0.3.
 - **Tender delivery lag** — won tenders deliver in the current period rather
   than honouring `delivery_period`.
+- **Scenario `notable_events`** — typed events such as a one-off expense or
+  an environmental-index step are carried in the context but not yet applied.
 - **Overtime, environmental tech, the category-level price-elasticity of
-  total market size, slow image/satisfaction dynamics.**
+  total market size, slow image/satisfaction dynamics, an explicit
+  bad-launch penalty.**
 
 > **Calibration note.** The `solar-v1` market potentials are sized for a
 > full cohort at scale. With a small cohort or early in the game, market_1

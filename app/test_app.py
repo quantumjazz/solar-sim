@@ -53,3 +53,40 @@ def test_run_period_produces_reports():
     assert any("Period 2" in h for h in headers), headers
     report_markers = [m.value for m in at.markdown if "Reports" in str(m.value)]
     assert any("period 1" in m for m in report_markers), report_markers
+
+
+def _click_run(at):
+    run_btn = next((b for b in at.button if b.label.startswith("Run period")), None)
+    assert run_btn is not None, "Run-period button should be present"
+    run_btn.click().run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_pre_launch_product_appears_in_period_2():
+    """panel_gen2 surfaces in the period-2 form as R&D-only, and stays valid.
+
+    This is the critical successor-product path: a product that exists for
+    R&D but is not yet launchable must render as R&D-only so it does not
+    produce an unrunnable decision.
+
+    (The test inspects the period-2 form rather than clicking through a
+    second period — AppTest's element tree cannot follow the widget-key
+    change across an `st.rerun()` period transition, though a real browser
+    handles it fine. Multi-period running is covered by the engine tests.)
+    """
+    at = _start_two_team_cohort()
+    _click_run(at)   # run period 1 -> workspace now on period 2
+    headers = [h.value for h in at.header]
+    assert any("Period 2" in h for h in headers), headers
+    # The period-2 form shows panel_gen2 as a pre-launch product.
+    markdowns = [str(m.value) for m in at.markdown]
+    assert any(
+        "panel_gen2" in m and "pre-launch" in m for m in markdowns
+    ), "panel_gen2 should render as a pre-launch product in period 2"
+    # The period-2 decision is valid — the console shows the success banner
+    # and no validation errors.
+    assert not at.error, [e.value for e in at.error]
+    assert any(
+        "pass validation" in str(s.value) for s in at.success
+    ), "period-2 decision should pass validation"

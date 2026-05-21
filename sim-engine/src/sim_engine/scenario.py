@@ -180,7 +180,19 @@ class InitialInventory(BaseModel):
 
 
 class ProductSpec(BaseModel):
-    """A product available in the simulation."""
+    """A product in the simulation.
+
+    A product has two availability gates:
+      - `available_from_period`: from this period the product exists in each
+        company's state and R&D can develop its indices (pre-launch
+        development). Its `indices` are the pre-launch starting values.
+      - `launchable_from_period`: from this period the product may be
+        produced and sold. Defaults to `available_from_period` when omitted.
+
+    `replaces` names a product this one supersedes (a successor generation).
+    When a company first produces the successor, the replaced product is
+    retired for that company (see docs/spec/02-rnd.md §5).
+    """
 
     model_config = ConfigDict(extra="allow")
 
@@ -188,6 +200,8 @@ class ProductSpec(BaseModel):
     display_name: str
     category: str = "panel"
     available_from_period: int = 0
+    launchable_from_period: Optional[int] = None
+    replaces: Optional[str] = None
     indices: ProductIndices = Field(default_factory=ProductIndices)
     input_material_units_per_product: float = 1.0
     factory_material_cost_per_unit: float = 5
@@ -195,6 +209,13 @@ class ProductSpec(BaseModel):
     production_capacity_per_person: float = 50
     initial_inventory: InitialInventory = Field(default_factory=InitialInventory)
     purchase_tiers: List[PurchaseTier] = Field(default_factory=list)
+
+    @property
+    def first_launch_period(self) -> int:
+        """The period from which the product can be produced and sold."""
+        if self.launchable_from_period is not None:
+            return self.launchable_from_period
+        return self.available_from_period
 
 
 class MarketCoefficients(BaseModel):

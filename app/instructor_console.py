@@ -194,6 +194,9 @@ def _render_workspace() -> None:
     product_ids = [
         p.id for p in ctx.products if p.available_from_period <= next_period
     ]
+    launchable_product_ids = [
+        p.id for p in ctx.products if p.first_launch_period <= next_period
+    ]
     catalog_types = [t.type_id for t in pack.pack.production_line_catalog]
     market_2_open = any(
         m.id == "market_2" and m.open_from_period <= next_period
@@ -235,6 +238,7 @@ def _render_workspace() -> None:
                 team_id=company.id,
                 period=next_period,
                 product_ids=product_ids,
+                launchable_product_ids=launchable_product_ids,
                 catalog_types=catalog_types,
                 defaults=defaults,
                 market_2_open=market_2_open,
