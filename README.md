@@ -3,19 +3,21 @@
 A multi-team classroom **business simulation** for university management courses,
 set in the **solar PV and energy-storage** industry.
 
-> **Status:** Engine and instructor console working. Mechanics spec +
-> scenario pack (Phase 0), multi-team Python engine with full P&L/balance-
-> sheet/cash-flow articulation, successor products (Gen-2 panel, battery
-> storage, balcony solar) with R&D development and a coexistence handover,
-> and a Streamlit instructor console for running a cohort.
-> 27 tests pass (23 engine + 4 app).
+> **Status:** Engine and both front ends working. Mechanics spec + scenario
+> pack (Phase 0), multi-team Python engine with full P&L / balance-sheet /
+> cash-flow articulation, successor products (Gen-2 panel, battery storage,
+> balcony solar) with R&D development and a coexistence handover, a
+> single-operator Streamlit instructor console, and a multi-user app with
+> per-student logins over a SQLite database.
+> 54 tests pass (28 engine + 26 app).
 > **Public name:** TBD. The directory name `solar-sim` is a placeholder.
 
 ## Quick start
 
 ```bash
 pip install streamlit pydantic pyyaml
-streamlit run app/instructor_console.py        # the instructor console
+streamlit run app/app.py                         # multi-user app (logins + SQLite)
+streamlit run app/instructor_console.py          # single-operator console
 cd sim-engine && PYTHONPATH=src python -m pytest # engine tests
 ```
 
@@ -78,7 +80,11 @@ solar-sim/
 │       ├── period-events.yaml        nine-period scenario (periods 1–9)
 │       └── narrative/                public-domain news clippings (Phase 0 next pass)
 ├── sim-engine/               ← Python simulation engine (multi-team, tested)
-└── app/                      ← Streamlit instructor console
+└── app/                      ← Streamlit front ends
+    ├── app.py                      multi-user app (logins, SQLite-backed)
+    ├── db.py / auth.py / service.py  the database, accounts, engine bridge
+    ├── forms.py / views.py          decision forms and report rendering
+    └── instructor_console.py        single-operator console (no database)
 ```
 
 ## How to read this repo (current state)

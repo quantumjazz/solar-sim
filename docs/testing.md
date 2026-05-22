@@ -8,9 +8,10 @@ cover.
 | Suite | File | Count | Harness |
 | --- | --- | --- | --- |
 | Engine | `sim-engine/tests/test_run_period.py` | 28 | `pytest` |
-| App | `app/test_app.py` | 4 | `pytest` + Streamlit `AppTest` |
+| Console app | `app/test_app.py` | 4 | `pytest` + Streamlit `AppTest` |
+| Multi-user app | `app/test_phase3.py` | 22 | `pytest` + Streamlit `AppTest` |
 
-As of 2026-05-22 all 32 pass.
+As of 2026-05-22 all 54 pass.
 
 ## Running the tests
 
@@ -21,10 +22,11 @@ and `-v --tb=short`):
 PYTHONPATH=src python3 -m pytest
 ```
 
-App — from the project root (`solar-sim/`):
+App — from the project root (`solar-sim/`); pointing pytest at `app/` runs
+both app suites:
 
 ```
-PYTHONPATH=sim-engine/src:app python3 -m pytest app/test_app.py
+PYTHONPATH=sim-engine/src:app python3 -m pytest app/
 ```
 
 There is no continuous-integration setup yet; tests are run locally.
@@ -78,6 +80,30 @@ runs and produces reports, and a pre-launch product appears in the
 period-2 form as R&D-only. Helpers `_start_two_team_cohort` and
 `_click_run` set up common flows.
 
+## What the multi-user-app tests cover
+
+`app/test_phase3.py` exercises the Phase 3 layer:
+
+- **Database** — user / cohort / team / membership CRUD, append-only period
+  states.
+- **Auth** — PBKDF2 hash round-trip; register and login; rejection of
+  duplicate emails, weak passwords, and unknown roles.
+- **Service** — cohort creation seeds period-0 state and period-1 drafts;
+  submission status; submit rejects an invalid decision; running a period
+  persists state, reports and the next drafts; the all-submitted gate and
+  its override; a full nine-period playthrough that asserts articulation
+  every period and finishes the cohort.
+- **App (AppTest)** — the login screen renders; registering lands on the
+  correct role view; an existing user logs in; an instructor creates a
+  cohort; a student fills and submits a decision end to end; an instructor
+  runs a period end to end.
+
+The AppTest tests point the app at a throwaway database via the
+`SOLAR_SIM_DB` environment variable. As with the console suite, a logout →
+re-login round trip is not driven through `AppTest` — its element tree
+cannot follow the widget-tree change across that `st.rerun()`; re-login
+works in a real browser.
+
 ## Known coverage gaps
 
 Truthful limits of the current suite:
@@ -95,6 +121,11 @@ Truthful limits of the current suite:
 - **Unimplemented features are untested** — overtime, rationalisation
   capacity effect, dynamic rating, share price (see
   `docs/current-task.md`).
+- **Browser rendering** — the multi-user app is verified headlessly with
+  `AppTest` (server-side script execution), not in a real browser; visual
+  layout is not asserted.
+- **Concurrency** — simultaneous multi-user writes to one cohort are not
+  tested; the suite is single-process.
 - No line-coverage measurement is collected.
 
 ## Conventions

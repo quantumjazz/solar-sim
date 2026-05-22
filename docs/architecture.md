@@ -85,14 +85,55 @@ if any team's decision is invalid (it never silently clamps).
 - **Purity.** The engine performs no I/O. Loading happens once via
   `load_scenario_pack`; everything else is in-memory model transformation.
 
-## The app
+## The front ends
 
-`app/instructor_console.py` is the Streamlit entry point. `forms.py` builds
-the per-team decision-entry forms; `views.py` renders the report bundles
-and the industry report. Cohort state lives in the Streamlit session and
-is serialised to / from a JSON file via the sidebar — there is no database.
-The app adds `sim-engine/src` to `sys.path` so the engine need not be
-installed for local use.
+`app/` holds two Streamlit front ends, both built on the same engine and the
+shared `forms.py` (decision-entry forms) and `views.py` (report rendering).
+Each adds `sim-engine/src` to `sys.path` so the engine need not be installed
+for local use.
+
+**Instructor console** (`instructor_console.py`) — a single operator drives
+the whole cohort: load a scenario, enter every team's decisions, run the
+period, review reports. Cohort state lives in the Streamlit session and is
+saved to / loaded from a JSON file. No database, no login.
+
+**Multi-user app** (`app.py`) — per-student logins over a shared SQLite
+database, so each team enters its own decisions. One Streamlit app,
+role-gated at login:
+
+- *Instructors* create cohorts, assign students to teams, watch the
+  submission dashboard, advance periods, and review every team's reports.
+- *Students* see the period briefing, fill and submit their team's
+  decision, and review their own reports plus the public industry report.
+
+Three modules sit under `app.py`:
+
+| Module | Responsibility |
+| --- | --- |
+| `db.py` | SQLite schema and CRUD. One connection per operation; WAL mode. The only module that touches SQLite. |
+| `auth.py` | PBKDF2 password hashing (stdlib), `register_user`, `authenticate`. |
+| `service.py` | `GameService` — the bridge between `db.py` and the engine: create a cohort (`build_initial_state`), save / submit decisions, `run_next_period` (`run_period`), persist state and reports. The UI never imports the engine directly. |
+
+Engine models cross the database boundary as JSON (`model_dump_json` /
+`model_validate_json`). The period history is append-only: every
+`PeriodState` is kept, so a cohort is fully replayable.
+
+### Data model
+
+`users` · `cohorts` · `teams` · `team_members` · `period_states`
+(append-only) · `decisions` (one draft / submitted row per cohort × team ×
+period) · `reports` (one `ReportBundle` per cohort × team × period — the
+industry report is embedded in each bundle). See `app/db.py` for the schema.
+
+### Decision flow
+
+Each period, a team's decision starts as a **draft** — seeded for period 1
+from a sensible default, and for later periods carried forward from the
+team's prior decision. Team members edit the draft; **submitting** validates
+it and locks it. The instructor advances the period once every team has
+submitted (or with an explicit override that uses current drafts).
+`run_period` validates all decisions again and either advances the cohort or
+rejects the period.
 
 ## Scenario pack layout
 

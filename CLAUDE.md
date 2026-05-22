@@ -3,9 +3,10 @@
 Guidance for AI agents (and humans) working in this repository.
 
 **solar-sim** is an open-source, copyright-safe classroom business simulation
-set in the solar-PV industry: a separable pure-Python engine plus a Streamlit
-instructor console. It is a clean-room alternative to commercial management
-simulations — see "IP discipline" below.
+set in the solar-PV industry: a separable pure-Python engine plus two
+Streamlit front ends — a single-operator instructor console and a multi-user,
+SQLite-backed app with per-student logins. It is a clean-room alternative to
+commercial management simulations — see "IP discipline" below.
 
 ## Commands
 
@@ -18,18 +19,20 @@ PYTHONPATH=src python3 -m pytest
 App tests — run from the project root (`solar-sim/`):
 
 ```
-PYTHONPATH=sim-engine/src:app python3 -m pytest app/test_app.py
+PYTHONPATH=sim-engine/src:app python3 -m pytest app/
 ```
 
-Run the instructor console — from `solar-sim/`:
+Run a front end — from `solar-sim/`:
 
 ```
-streamlit run app/instructor_console.py
+streamlit run app/app.py                 # multi-user app (logins + SQLite)
+streamlit run app/instructor_console.py  # single-operator console (no DB)
 ```
 
-As of 2026-05-22: 28 engine tests + 4 app tests, all passing. Runtime
-dependencies: `pydantic` (v2), `pyyaml`, `streamlit`. Test dependency:
-`pytest`. There is no build step.
+As of 2026-05-22: 28 engine tests + 26 app tests, all passing. Runtime
+dependencies: `pydantic` (v2), `pyyaml`, `streamlit`. The multi-user app
+also uses `sqlite3`, `hashlib`, and `secrets` — all from the standard
+library. Test dependency: `pytest`. There is no build step.
 
 ## Architecture map
 
@@ -44,7 +47,13 @@ sim-engine/        pure-Python simulation engine — package `sim_engine`
   engine.py          run_period orchestrator + all rule modules
 scenarios/solar-v1/  the scenario pack (scenario.yaml, period-events.yaml,
                      narrative/period-1..9.md)
-app/                 Streamlit instructor console (depends on the engine)
+app/                 Streamlit front ends (depend on the engine)
+  app.py               multi-user app: logins, role-gating, SQLite-backed
+  db.py                SQLite schema + CRUD
+  auth.py              account hashing, register / login
+  service.py           bridges the database to the engine
+  forms.py / views.py  decision-entry forms / report rendering (shared)
+  instructor_console.py  single-operator console (no database)
 docs/                spec/, sources.md, calibration.md, architecture.md,
                      current-task.md, decisions.md, testing.md
 ```
@@ -75,8 +84,8 @@ cohort settlement → post-market. Full detail in `docs/architecture.md`.
   Never read it into code or docs, and never `git add` it.
 - `LICENSE-CODE` (MIT) and `LICENSE-CONTENT` (CC-BY-SA 4.0) — do not change
   licensing.
-- Do not commit `__pycache__/`, `.pytest_cache/`, or `.DS_Store` (the
-  `.gitignore` already excludes them).
+- Do not commit `__pycache__/`, `.pytest_cache/`, `.DS_Store`, or the
+  `*.db` cohort database (the `.gitignore` already excludes them).
 
 ## IP discipline (non-negotiable)
 
@@ -91,6 +100,8 @@ Code is MIT-licensed; documentation and scenario content are CC-BY-SA 4.0.
   `solar-sim/` subtree is tracked.
 - Commit only when explicitly asked. Never run `git push` — the maintainer
   pushes to GitHub over SSH.
-- **There is no deployment.** The app runs locally; cohort state lives in
-  the Streamlit session and is saved/loaded as a JSON file. No database,
-  no authentication. A hosted multi-team setup is a future phase.
+- **No hosted deployment.** Both front ends run locally. The multi-user
+  app (`app/app.py`) keeps cohort state in a SQLite file (`solar-sim.db` at
+  the repo root, or `$SOLAR_SIM_DB`); students connect to the instructor's
+  machine over the local network. The console (`instructor_console.py`) has
+  no database and saves a game as a JSON file.

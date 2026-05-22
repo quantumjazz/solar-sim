@@ -144,3 +144,33 @@ The copyrighted commercial-simulation archives sit in a sibling folder of
 `solar-sim/` inside the same git repository. They are deliberately
 untracked (copyright, and ~2 GB in size) and must never be committed.
 **Status: adopted.**
+
+### 18. Phase 3: per-student accounts, SQLite, one role-gated app
+
+The student-facing app is a single Streamlit app, role-gated at login, over
+a SQLite database, with per-student accounts. Each fork was an explicit
+choice: **per-student accounts** (over team join codes) so individuals have
+an identity — useful for a later peer-assessment layer; **SQLite** (over
+PostgreSQL) — one file, zero setup, self-hostable, and ample for classroom
+scale; **one app** (over separate student and instructor apps) — a single
+codebase and process, with login deciding the view.
+**Status: adopted.**
+
+### 19. The instructor console is kept as a database-free mode
+
+`instructor_console.py` was not replaced by the multi-user app. It remains a
+single-operator tool with no database or login — the fastest way to run a
+cohort solo, and it matches how the reference course ran. The two front ends
+share `forms.py` and `views.py`.
+**Status: adopted.**
+
+### 20. Phase 3 scope: a persistence-and-UI layer, no engine changes
+
+The student-facing app touches no engine code: `service.py` bridges the
+SQLite store to the engine's existing public API. It adds no third-party
+dependency — `sqlite3`, `hashlib` (PBKDF2 password hashing) and `secrets`
+are all standard library. A logged-in session lives in Streamlit
+`session_state`, so a hard browser refresh requires logging in again;
+cookie-based persistence, real-time updates, and the graded pedagogy layer
+were all deferred.
+**Status: adopted.**

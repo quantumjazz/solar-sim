@@ -21,3 +21,8 @@ env/
 .idea/
 .vscode/
 *.swp
+
+# Local cohort database (multi-user app)
+*.db
+*.db-wal
+*.db-shm

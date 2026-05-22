@@ -1,62 +1,89 @@
-# app — Instructor Console
+# app — Streamlit front ends
 
-A Streamlit app for running a cohort of the solar-sim business simulation.
+Two ways to run the solar-sim business simulation, both built on the same
+engine (`../sim-engine/`) and the shared `forms.py` / `views.py` helpers.
 
-## What it does
+## Multi-user app — `app.py`
 
-One screen per period. The instructor:
+A single Streamlit app with per-student logins over a shared SQLite
+database, role-gated at login:
 
-1. **Sets up a cohort** — picks a scenario pack and names the teams.
-2. **Enters decisions** — one expandable form per team (sales, R&D,
-   purchasing, production, HR, finance), pre-filled from the team's previous
-   period.
-3. **Runs the period** — decisions are validated first; invalid ones are
-   shown inline and block the run.
-4. **Reviews reports** — per-team executive summary, market, P&L, balance
-   sheet and cash flow, plus the cohort-wide industry report.
+- **Instructors** create a cohort (scenario + named teams), assign
+  registered students to teams, watch a submission dashboard, advance
+  periods, and review every team's reports.
+- **Students** log in, read the period briefing, enter and submit their
+  team's decision (sales, R&D, purchasing, production, HR, finance), and
+  review their team's reports plus the public industry report.
 
-Cohort state lives in the Streamlit session. There is no database or login:
-a game can be saved to / loaded from a JSON file via the sidebar. This
-matches how the reference course ran — teams submit decision forms, the
-instructor runs them centrally.
-
-## Running it
-
-From the repository root (`solar-sim/`):
+Each period a team's decision starts as a **draft**; **submitting** it
+validates and locks it. The instructor advances the period once all teams
+have submitted (an override can run with current drafts). State is shared,
+so the instructor and every student see the same cohort.
 
 ```bash
-pip install streamlit
-pip install -e sim-engine          # or rely on the app's sys.path shim
-streamlit run app/instructor_console.py
+pip install streamlit pydantic pyyaml
+streamlit run app/app.py
 ```
 
-The app adds `sim-engine/src` to `sys.path` itself, so installing the engine
-is optional for local use.
+The cohort database is `solar-sim.db` at the repository root; set the
+`SOLAR_SIM_DB` environment variable to put it elsewhere. There is no hosted
+deployment — the instructor runs the app and students connect over the
+local network. Register the first instructor account from the login screen.
+
+Three modules sit under `app.py`:
+
+| Module | Responsibility |
+| --- | --- |
+| `db.py` | SQLite schema and CRUD — the only module that touches SQLite. |
+| `auth.py` | PBKDF2 password hashing (stdlib), register / login. |
+| `service.py` | `GameService` — bridges the database to the engine: create a cohort, save / submit decisions, run a period, fetch reports. |
+
+## Instructor console — `instructor_console.py`
+
+A single-operator tool: one person loads a scenario, enters every team's
+decisions, runs the period, and reviews reports. Cohort state lives in the
+Streamlit session and is saved to / loaded from a JSON file. No database,
+no login — the quickest way to run a cohort solo.
+
+```bash
+streamlit run app/instructor_console.py
+```
 
 ## Files
 
 ```
 app/
-├── instructor_console.py   the Streamlit app (entry point)
-├── forms.py                decision-entry form builders
-├── views.py                report-rendering helpers
-├── test_app.py             AppTest smoke test (headless)
+├── app.py                  multi-user app (entry point)
+├── db.py                   SQLite schema + CRUD
+├── auth.py                 accounts: hashing, register, login
+├── service.py              database-to-engine bridge (GameService)
+├── instructor_console.py   single-operator console (entry point)
+├── forms.py                decision-entry form builders (shared)
+├── views.py                report-rendering helpers (shared)
+├── test_app.py             AppTest smoke test for the console
+├── test_phase3.py          db / auth / service + AppTest tests for app.py
 └── README.md               this file
 ```
 
+Both entry points add `sim-engine/src` to `sys.path`, so the engine need
+not be installed for local use.
+
 ## Testing
 
-The app has a headless smoke test using Streamlit's `AppTest` harness:
+From the repository root (`solar-sim/`):
 
 ```bash
-PYTHONPATH=sim-engine/src:app python3 -m pytest app/test_app.py
+PYTHONPATH=sim-engine/src:app python3 -m pytest app/
 ```
 
-It exercises the full flow — initial screen, cohort setup, running a period,
-and rendering reports — without a browser.
+`test_app.py` (4 tests) drives the console headlessly with Streamlit's
+`AppTest`. `test_phase3.py` (22 tests) covers the database, accounts, and
+the game service directly, plus `AppTest` smoke tests of `app.py` —
+including an end-to-end student submission and an instructor period run.
 
-## Scope (this iteration)
+## Known limitations (multi-user app)
 
-This is the **instructor console**: a single operator drives the whole
-cohort. A student-facing app with per-team logins, decision submission and a
-shared database is a later phase.
+A logged-in session lives in Streamlit `session_state`, so a hard browser
+refresh requires logging in again. There are no real-time updates (refresh
+to see others' progress), and two members of one team editing the same
+draft is last-write-wins. See `../docs/current-task.md`.
