@@ -789,6 +789,117 @@ def test_producing_before_launch_period_rejected(pack):
         run_period(state, {"c1": d2}, pack)
 
 
+def _plain_decision(team_id, period):
+    return _build_decision(
+        team_id=team_id, period=period,
+        price=2_900, advertising=6_000_000, sales_force=110, researchers=40,
+        sustainability_spend=2_000_000, value_analysis_spend=1_000_000,
+        order_units=44_000, target_volume=46_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=800,
+        process_optimisation_spend=1_000_000, non_salary_pct=0.40,
+        pension_reserve_pct=0.05, short_term_loan=30_000_000, dividend=0,
+    )
+
+
+def test_environmental_law_cuts_line_indices(pack):
+    """The period-5 env_index_step lowers every owned line's env index by 15."""
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    env_before = {l.id: l.environmental_index for l in state.companies[0].lines}
+
+    for period in range(1, 6):  # run through period 5
+        state, _ = run_period(state, {"c1": _plain_decision("c1", period)}, pack)
+
+    for line in state.companies[0].lines:
+        assert line.environmental_index == env_before[line.id] - 15, (
+            f"{line.id}: env index should have dropped 15 after the period-5 law"
+        )
+
+
+def test_one_off_expense_lands_in_period_6(pack):
+    """The period-6 one-off remediation charge shows up in other expenses."""
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    other_by_period = {}
+    for period in range(1, 8):
+        state, reports = run_period(state, {"c1": _plain_decision("c1", period)}, pack)
+        other_by_period[period] = reports["c1"].profit_and_loss.other_expenses
+
+    # Period 6 carries a 6 mEUR one-off charge that period 7 does not; the
+    # rest of the cost base moves only modestly period to period.
+    assert other_by_period[6] - other_by_period[7] > 4_000_000, (
+        f"period-6 other expenses ({other_by_period[6]:,.0f}) should exceed "
+        f"period 7 ({other_by_period[7]:,.0f}) by roughly the 6 mEUR one-off"
+    )
+
+
+def test_max_dismissals_cap_enforced(pack):
+    """Period 3 forbids production dismissals; such a decision is rejected."""
+    from sim_engine.engine import build_initial_state
+    from sim_engine.decisions import HRDecision
+    from sim_engine.validation import InvalidDecisionError
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    for period in (1, 2):
+        state, _ = run_period(state, {"c1": _plain_decision("c1", period)}, pack)
+
+    # Period 3 has a max_dismissals_production cap of 0 (job-protection deal).
+    d3 = _plain_decision("c1", 3)
+    d3.hr = HRDecision(
+        production_workforce_change=-50,  # any dismissal violates the cap
+        training_per_employee=800, process_optimisation_spend=1_000_000,
+        non_salary_pct=0.40, pension_reserve_pct=0.05,
+    )
+    with pytest.raises(InvalidDecisionError):
+        run_period(state, {"c1": d3}, pack)
+
+
+def test_environmental_capex_articulates(pack):
+    """Spending on environmental technology must not break the balance sheet.
+
+    Regression test: env capex used to leave cash without recording an
+    asset, so any non-zero spend broke the assets = liabilities + equity
+    identity.
+    """
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    decision = _plain_decision("c1", 1)
+    decision.production.environmental_capex = 10_000_000
+    _, reports = run_period(state, {"c1": decision}, pack)
+
+    bs = reports["c1"].balance_sheet
+    assert bs.articulates, "balance sheet must articulate after env capex"
+    assert reports["c1"].cash_flow.articulates
+    # The spend is capitalised, less one period of straight-line depreciation.
+    assert bs.environmental_tech_nbv > 0
+
+
+def test_environmental_capex_reduces_penalty(pack):
+    """End-of-pipe environmental tech lowers the compliance penalty."""
+    from sim_engine.engine import build_initial_state
+
+    decision_with = _plain_decision("c1", 1)
+    decision_with.production.environmental_capex = 8_000_000
+    decision_without = _plain_decision("c1", 1)
+
+    _, rep_with = run_period(
+        build_initial_state(pack, company_ids=["c1"]),
+        {"c1": decision_with}, pack,
+    )
+    _, rep_without = run_period(
+        build_initial_state(pack, company_ids=["c1"]),
+        {"c1": decision_without}, pack,
+    )
+
+    assert (
+        rep_with["c1"].profit_and_loss.other_expenses
+        < rep_without["c1"].profit_and_loss.other_expenses
+    ), "env-tech abatement should reduce the environmental compliance penalty"
+
+
 def test_determinism(state_0, default_decision_p1, pack):
     """Same inputs should yield identical reports."""
     s1a, r1a = run_period(state_0, default_decision_p1, pack)

@@ -275,14 +275,21 @@ environmental_damage_indicator =
   + environmental_tech_bonus
 ```
 
-Where `environmental_tech_bonus` is a function of cumulative end-of-pipe
-environmental capex:
+Where `environmental_tech_bonus` ("abatement") is a function of the **net
+book value** of end-of-pipe environmental tech — linear, with a cap:
 
 ```
-environmental_tech_bonus = E_K · log(1 + cumulative_env_capex / E_ref)
+environmental_tech_bonus = min(
+    ENV_ABATEMENT_CAP,
+    environmental_tech_nbv / ENV_ABATEMENT_COST_PER_POINT
+)
 ```
 
-Defaults: `E_K = 8`, `E_ref = 5 mEUR`. So 5 mEUR cumulative → +5.5 points.
+Defaults: `ENV_ABATEMENT_COST_PER_POINT = 1 mEUR` per index point,
+`ENV_ABATEMENT_CAP = 20` points. NBV is used rather than cumulative capex
+so the bonus *fades as the equipment depreciates* — a company must keep
+reinvesting to hold its abatement, which makes env-tech a recurring
+decision rather than a one-off.
 
 ### 6.1 Compliance threshold
 

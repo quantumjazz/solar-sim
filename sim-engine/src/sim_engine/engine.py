@@ -1,32 +1,33 @@
 """Engine orchestrator and rule modules.
 
-v0.2 (multi-team, full attraction model):
+The period loop has three phases:
 
-  Period loop has three phases:
+  1. Pre-market — per-company: materialise newly available products, apply
+     notable events, R&D, HR, line investment, capacity, purchasing,
+     production. Updates finished-goods inventory but does not yet sell.
 
-  1. Pre-market — per-company: R&D, HR, capacity, purchasing, production.
-     Updates finished-goods inventory but does not yet sell anything.
-
-  2. Market settlement — across the cohort: gather attractiveness from each
-     company, allocate each market's total demand proportionally to each
-     company's share of total attractiveness, then cap by each company's
-     available finished inventory. Spillover from under-supply is
-     redistributed once.
+  2. Market settlement — across the cohort: tenders and bulk buyers settle
+     first (priority channels), then retail in each open market via the
+     multinomial attraction model. Each market's demand is allocated to
+     companies in proportion to attractiveness and capped by available
+     inventory; under-supply spillover is redistributed once.
 
   3. Post-market — per-company: deduct sales from inventory, compute COGS,
      overhead, depreciation; produce P&L → balance sheet → cash flow with
      all articulation identities holding.
 
-What's still stubbed in v0.2 (TODO markers in code):
-  - Bulk buyer / tender channels (sales is retail-only)
-  - Multi-market support (sales uses market_1; market_2 logic deferred)
-  - Productivity Index I (motivation × competence × adaptation × process_opt)
-  - Productivity Index II (learning curve) — cumulative units tracked, factor
-    placeholder
-  - Auto-scaled purchasing/admin headcount
-  - Successor product launch logic
-  - Environmental tech investment / damage indicator
-  - Slow-moving image / satisfaction / motivation dynamics
+Implemented: multi-team cohorts, the full attraction model, period events,
+bulk/tender channels, the export market with FX, HR productivity indices I
+and II, auto-scaled purchasing/admin headcount, production-line
+invest/disinvest, successor-product launch, decision validation, the
+industry report, and environmental tech with end-of-pipe abatement.
+
+Still simplified (TODO markers in code):
+  - Tender delivery-period lag — won tenders deliver in the current period
+  - Overtime (Available Capacity III) — production caps at Capacity II
+  - Rationalisation spend is booked as cost but does not raise capacity
+  - rating_index and image/satisfaction indices are not yet dynamic
+  - share price is not yet modelled
 """
 
 from __future__ import annotations
@@ -288,6 +289,11 @@ def _pre_market_phase(
     # 0. Materialise any products that have just become available
     _materialise_products(new_company, ctx)
 
+    # 0b. Apply scenario notable events (env-index step, one-off expense, …).
+    #     Runs before line investment so a one-off env shock hits only the
+    #     lines the company already owns, not lines bought this period.
+    _apply_notable_events(new_company, ctx, scratch)
+
     # 1. R&D — index dynamics
     _apply_rnd(new_company, decision, pack, ctx)
 
@@ -329,7 +335,7 @@ def _post_market_phase(
     _apply_sales_allocation_and_finished_inventory(new_company, decision, pack, scratch)
 
     # 8. Costing — depreciation, overhead, period totals
-    _apply_depreciation_and_overhead(new_company, decision, pack, scratch)
+    _apply_depreciation_and_overhead(new_company, decision, pack, ctx, scratch)
 
     # 9. Finance — interest, tax, dividend; build P&L, BS, CF
     pl, bs, cf = _articulate(
@@ -402,6 +408,33 @@ def _materialise_products(
             units=spec.initial_inventory.finished_goods_units,
             unit_value=spec.initial_inventory.finished_goods_unit_value,
         )
+
+
+def _apply_notable_events(
+    company: CompanyState,
+    ctx: ResolvedPeriodContext,
+    scratch: "_PeriodScratch",
+) -> None:
+    """Apply this period's typed scenario notable events.
+
+    Handled here:
+      - `env_index_step`     a permanent change to every owned line's
+                             environmental index (e.g. a stricter law)
+      - `one_off_other_expense`  a one-off cost booked into other expenses
+
+    Other event types are consumed elsewhere: `production_line_offer` via
+    `ctx.line_price_offers` in `_apply_line_changes`, `max_dismissals` via
+    `ctx.max_dismissals_production` in decision validation. `scoring_period`
+    is informational only.
+    """
+    for ne in ctx.notable_events:
+        etype = ne.get("type")
+        if etype == "env_index_step":
+            delta = ne.get("delta", 0)
+            for line in company.lines:
+                line.environmental_index = max(0.0, line.environmental_index + delta)
+        elif etype == "one_off_other_expense":
+            scratch.total_overhead_other += float(ne.get("amount", 0))
 
 
 def _apply_rnd(
@@ -640,13 +673,15 @@ def _apply_line_changes(
         item = catalog.get(type_id)
         if item is None:
             continue
+        # A one-period production-line offer overrides the catalog price.
+        unit_price = ctx.line_price_offers.get(type_id, item.purchase_price)
         for k in range(count):
             company.lines.append(
                 ProductionLineState(
                     id=f"{company.id}-{type_id}-p{ctx.period}-{k + 1}",
                     type=type_id,
                     acquisition_period=ctx.period,
-                    purchase_value=item.purchase_price,
+                    purchase_value=unit_price,
                     normal_capacity=item.normal_capacity,
                     useful_life=item.useful_life,
                     remaining_life=item.useful_life,
@@ -654,7 +689,7 @@ def _apply_line_changes(
                     environmental_index=item.environmental_index,
                 )
             )
-        scratch.line_purchases += count * item.purchase_price
+        scratch.line_purchases += count * unit_price
 
 
 def _compute_available_capacity(
@@ -1261,21 +1296,31 @@ def _apply_sales_allocation_and_finished_inventory(
         scratch.total_cogs += cogs_value
 
 
+# --- Environmental end-of-pipe technology -----------------------------------
+# Env-tech investment is capitalised and depreciated straight-line. Its net
+# book value buys "abatement" index points that offset the environmental
+# compliance penalty, so the spend is a genuine lever (see 03-production.md §6).
+_ENV_TECH_USEFUL_LIFE = 10                    # periods
+_ENV_ABATEMENT_COST_PER_POINT = 1_000_000.0   # EUR of NBV per index point
+_ENV_ABATEMENT_CAP = 20.0                     # max index points from abatement
+
+
 def _apply_depreciation_and_overhead(
     company: CompanyState,
     decision: TeamDecision,
     pack: LoadedScenarioPack,
+    ctx: ResolvedPeriodContext,
     scratch: _PeriodScratch,
 ) -> None:
     """Compute depreciation and roll up overhead expenses for the period.
 
-    v0.1: straight-line depreciation on production lines and a flat
-    building depreciation from world defaults. Other overhead includes
-    advertising, CI, market research fee, maintenance/rationalisation,
-    transport, R&D consulting spend (sustainability + value-analysis).
+    Straight-line depreciation on production lines and buildings. Other
+    overhead includes advertising, CI, market-research fee,
+    maintenance/rationalisation, transport, R&D consulting spend, storage,
+    and the environmental compliance penalty.
     """
 
-    world = pack.pack.world
+    world = ctx.world
 
     # Building depreciation
     building_dep = world.production.building_depreciation_per_period
@@ -1288,7 +1333,20 @@ def _apply_depreciation_and_overhead(
             line_dep += per_period
             line.remaining_life = max(0, line.remaining_life - 1)
 
-    scratch.total_depreciation = building_dep + line_dep
+    # Environmental technology — capitalise this period's end-of-pipe spend,
+    # then depreciate the pool straight-line over its useful life. The cash
+    # outflow is handled in _articulate; recording the asset and its
+    # depreciation here is what keeps the balance sheet articulating.
+    env_capex = decision.production.environmental_capex
+    company.cumulative_env_capex += env_capex
+    company.environmental_tech_nbv += env_capex
+    env_tech_dep = min(
+        company.cumulative_env_capex / _ENV_TECH_USEFUL_LIFE,
+        company.environmental_tech_nbv,
+    )
+    company.environmental_tech_nbv -= env_tech_dep
+
+    scratch.total_depreciation = building_dep + line_dep + env_tech_dep
 
     # Advertising + CI + market research fee + R&D consulting + maintenance
     for sales_dec in decision.sales.by_product:
@@ -1334,6 +1392,36 @@ def _apply_depreciation_and_overhead(
     # Other line fixed costs
     for line in company.lines:
         scratch.total_overhead_other += line.other_fixed_cost
+
+    # Environmental compliance penalty: the company's production fleet
+    # (capacity-weighted average environmental index), lifted by any
+    # end-of-pipe environmental technology, is compared with the legal
+    # baseline. If it still falls short, a per-index-point penalty is
+    # charged. The baseline can rise via a period event (e.g. the period-5
+    # environmental law).
+    if company.lines:
+        total_capacity = sum(line.normal_capacity for line in company.lines)
+        if total_capacity > 0:
+            avg_env_index = (
+                sum(
+                    line.environmental_index * line.normal_capacity
+                    for line in company.lines
+                )
+                / total_capacity
+            )
+            # End-of-pipe abatement: env-tech net book value buys index
+            # points (up to a cap), making the investment a real lever.
+            abatement = min(
+                _ENV_ABATEMENT_CAP,
+                company.environmental_tech_nbv / _ENV_ABATEMENT_COST_PER_POINT,
+            )
+            effective_env_index = avg_env_index + abatement
+            baseline = world.production.environmental_compliance_baseline
+            if effective_env_index < baseline:
+                penalty = (baseline - effective_env_index) * (
+                    world.production.environmental_penalty_per_index_point
+                )
+                scratch.total_overhead_other += penalty
 
 
 def _articulate(

@@ -142,17 +142,17 @@ products:
     # Inventory at start
     initial_inventory:
       input_material_units: 15_000
-      input_material_unit_value: 1_000
+      input_material_unit_value: 850
       finished_goods_units: 5_000
-      finished_goods_unit_value: 1_900
+      finished_goods_unit_value: 1_700
     # Purchase price tiers for input material (EUR/unit). Volume discounts
-    # reward larger orders. Tuned so a lean decision is roughly break-even
-    # and an aggressive index-building decision runs a controlled loss.
+    # reward larger orders. Calibrated (see docs/calibration.md) so a median
+    # decision is roughly break-even and skill is rewarded.
     purchase_tiers:
-      - { max_units: 30_000, unit_price: 1_150 }
-      - { max_units: 50_000, unit_price: 1_000 }
-      - { max_units: 70_000, unit_price: 900 }
-      - { max_units: null,   unit_price: 850 }   # 70 000+
+      - { max_units: 30_000, unit_price: 950 }
+      - { max_units: 50_000, unit_price: 830 }
+      - { max_units: 70_000, unit_price: 750 }
+      - { max_units: null,   unit_price: 700 }   # 70 000+
 
   - id: panel_gen2
     display_name: "High-Efficiency PV System Kit (Gen 2)"
@@ -177,10 +177,10 @@ products:
       finished_goods_units: 0
       finished_goods_unit_value: 0
     purchase_tiers:
-      - { max_units: 30_000, unit_price: 950 }
-      - { max_units: 50_000, unit_price: 830 }
-      - { max_units: 70_000, unit_price: 740 }
-      - { max_units: null,   unit_price: 690 }
+      - { max_units: 30_000, unit_price: 820 }
+      - { max_units: 50_000, unit_price: 720 }
+      - { max_units: 70_000, unit_price: 650 }
+      - { max_units: null,   unit_price: 610 }
 
   - id: storage_box
     display_name: "Residential Battery Storage System"

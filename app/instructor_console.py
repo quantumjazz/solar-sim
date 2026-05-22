@@ -171,6 +171,20 @@ def _render_sidebar() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _load_narrative(event) -> str:
+    """Return the period's narrative briefing markdown, or "" if there is none.
+
+    `event.narrative_file` is a path relative to the scenario pack folder.
+    """
+    if event is None or not getattr(event, "narrative_file", None):
+        return ""
+    path = Path(st.session_state.scenario_path) / event.narrative_file
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def _render_workspace() -> None:
     state: PeriodState = st.session_state.period_state
     pack = st.session_state.pack
@@ -187,6 +201,10 @@ def _render_workspace() -> None:
         st.subheader(f"{phase} period — {event.headline}")
         if event.economy:
             st.caption(" · ".join(f"{k}: {v}" for k, v in event.economy.items()))
+        briefing = _load_narrative(event)
+        if briefing:
+            with st.expander("Period briefing", expanded=True):
+                st.markdown(briefing)
     if is_final:
         st.warning("This is the final scored period — equity at its close is the result.")
 

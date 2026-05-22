@@ -111,6 +111,15 @@ def validate_decision(
             f"cannot dismiss {-change} production staff; "
             f"only {prod_headcount} are employed"
         )
+    if (
+        change < 0
+        and ctx.max_dismissals_production is not None
+        and -change > ctx.max_dismissals_production
+    ):
+        errors.append(
+            f"cannot dismiss {-change} production staff this period; "
+            f"a cap of {ctx.max_dismissals_production} is in force"
+        )
     non_negative(decision.hr.training_per_employee, "training per employee")
     non_negative(
         decision.hr.process_optimisation_spend, "process-optimisation spend"

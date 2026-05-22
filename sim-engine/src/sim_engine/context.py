@@ -39,6 +39,10 @@ class ResolvedPeriodContext(BaseModel):
     bulk_buyers: List[BulkBuyerOffer] = Field(default_factory=list)
     tenders: List[TenderOffer] = Field(default_factory=list)
     notable_events: List[Dict] = Field(default_factory=list)
+    # Maximum production-staff dismissals allowed this period (None = no cap).
+    max_dismissals_production: Optional[int] = None
+    # type_id -> discounted purchase price, for one-period production-line offers.
+    line_price_offers: Dict[str, float] = Field(default_factory=dict)
     event: Optional[PeriodEvent] = None
 
     def product(self, product_id: str) -> ProductSpec:
@@ -68,6 +72,8 @@ def resolve_period_context(
     bulk_buyers: List[BulkBuyerOffer] = []
     tenders: List[TenderOffer] = []
     notable_events: List[Dict] = []
+    max_dismissals_production: Optional[int] = None
+    line_price_offers: Dict[str, float] = {}
 
     if event is not None:
         params = event.parameter_changes or {}
@@ -150,6 +156,21 @@ def resolve_period_context(
         tenders = list(event.tenders)
         notable_events = [ne.model_dump() for ne in event.notable_events]
 
+        # ---- Max production dismissals (parameter or notable-event form) ---
+        if "max_dismissals_production" in params:
+            max_dismissals_production = params["max_dismissals_production"]
+        for ne in notable_events:
+            if ne.get("type") == "max_dismissals" and "limit" in ne:
+                max_dismissals_production = ne["limit"]
+
+        # ---- One-period production-line price offers -----------------------
+        for ne in notable_events:
+            if ne.get("type") == "production_line_offer":
+                type_id = ne.get("type_id")
+                price = ne.get("discounted_price")
+                if type_id is not None and price is not None:
+                    line_price_offers[type_id] = price
+
     return ResolvedPeriodContext(
         period=period,
         world=world,
@@ -159,6 +180,8 @@ def resolve_period_context(
         bulk_buyers=bulk_buyers,
         tenders=tenders,
         notable_events=notable_events,
+        max_dismissals_production=max_dismissals_production,
+        line_price_offers=line_price_offers,
         event=event,
     )
 
