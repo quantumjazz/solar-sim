@@ -32,6 +32,11 @@ from sim_engine.validation import validate_decision
 
 from db import Database
 from forms import default_decision
+from pedagogy import (
+    PeriodPlanningQuality,
+    StrategyMap,
+    TeamPlanningQuality,
+)
 
 
 class ServiceError(Exception):
@@ -421,3 +426,86 @@ class GameService:
             if bundle.industry is not None:
                 return bundle.industry
         return None
+
+    # -- pedagogy: planning quality -----------------------------------------
+
+    def team_planning_quality(
+        self, cohort_id: int, team_id: int
+    ) -> TeamPlanningQuality:
+        """Compute one team's planning quality across all completed periods.
+
+        Reads the stored decisions for planned KPIs and the stored reports
+        for actuals; skips periods missing either side (none should be
+        missing for a normally-progressed cohort). The headline score is
+        the mean over real periods only (see `09-pedagogy.md` §1.3).
+        """
+        cohort = self.db.get_cohort(cohort_id)
+        if cohort is None:
+            raise ServiceError(f"Cohort {cohort_id} does not exist.")
+        completed = int(cohort["current_period"])
+        if completed < 1:
+            return TeamPlanningQuality(team_id=team_id, periods=[])
+
+        pack = load_scenario_pack(cohort["scenario_path"])
+        real_periods = set(pack.pack.scenario.real_periods)
+
+        periods: List[PeriodPlanningQuality] = []
+        for period in range(1, completed + 1):
+            decision_row = self.db.get_decision(cohort_id, team_id, period)
+            report_raw = self.db.get_report(cohort_id, team_id, period)
+            if decision_row is None or report_raw is None:
+                continue
+            decision = TeamDecision.model_validate_json(
+                decision_row["decision_json"]
+            )
+            report = ReportBundle.model_validate_json(report_raw)
+            periods.append(
+                PeriodPlanningQuality.from_planned_and_actual(
+                    period=period,
+                    is_real_period=period in real_periods,
+                    planned=decision.finance.planned_kpis,
+                    actual=report,
+                )
+            )
+        return TeamPlanningQuality.from_periods(team_id, periods)
+
+    # -- pedagogy: strategy map ---------------------------------------------
+
+    def get_strategy_map(
+        self, cohort_id: int, team_id: int
+    ) -> StrategyMap:
+        """The team's balanced-scorecard map; an empty one if never edited."""
+        row = self.db.get_strategy_map(cohort_id, team_id)
+        if row is None:
+            return StrategyMap(cohort_id=cohort_id, team_id=team_id)
+        return StrategyMap(
+            cohort_id=cohort_id,
+            team_id=team_id,
+            financial=row["financial"],
+            customer=row["customer"],
+            internal_process=row["internal_process"],
+            learning_growth=row["learning_growth"],
+            updated_by=row["updated_by"],
+            updated_at=row["updated_at"],
+        )
+
+    def save_strategy_map(
+        self,
+        cohort_id: int,
+        team_id: int,
+        financial: str,
+        customer: str,
+        internal_process: str,
+        learning_growth: str,
+        user_id: int,
+    ) -> None:
+        """Upsert the team's balanced-scorecard strategy map."""
+        self.db.upsert_strategy_map(
+            cohort_id,
+            team_id,
+            financial,
+            customer,
+            internal_process,
+            learning_growth,
+            user_id,
+        )

@@ -9,9 +9,9 @@ cover.
 | --- | --- | --- | --- |
 | Engine | `sim-engine/tests/test_run_period.py` | 28 | `pytest` |
 | Console app | `app/test_app.py` | 4 | `pytest` + Streamlit `AppTest` |
-| Multi-user app | `app/test_phase3.py` | 22 | `pytest` + Streamlit `AppTest` |
+| Multi-user app + pedagogy | `app/test_phase3.py` | 33 | `pytest` + Streamlit `AppTest` |
 
-As of 2026-05-22 all 54 pass.
+As of 2026-05-22 all 65 pass.
 
 ## Running the tests
 
@@ -96,7 +96,25 @@ period-2 form as R&D-only. Helpers `_start_two_team_cohort` and
 - **App (AppTest)** — the login screen renders; registering lands on the
   correct role view; an existing user logs in; an instructor creates a
   cohort; a student fills and submits a decision end to end; an instructor
-  runs a period end to end.
+  runs a period end to end; a student sees the planning-quality tab after a
+  period has been run; a student saves a strategy map.
+
+## What the pedagogy-layer tests cover
+
+Bundled into `app/test_phase3.py`:
+
+- **`pedagogy.py` (pure)** — sMAPE edge cases (perfect, both zero, sign
+  flip, half off), bound assertions across random inputs; aggregation
+  rules (the headline averages only real periods, returns `None` if no
+  real period has run); the `StrategyMap.is_empty` rule (whitespace-only
+  is empty).
+- **`db.py` strategy_maps** — upsert creates a row; upsert again
+  overwrites; list returns the cohort's maps.
+- **`service.py` pedagogy** — strategy-map roundtrip; per-period
+  planning-quality computation after a period runs (three KPIs scored,
+  trial-period correctly flagged, headline `None` when only trial
+  periods have run); planning quality before any period yields an empty
+  result.
 
 The AppTest tests point the app at a throwaway database via the
 `SOLAR_SIM_DB` environment variable. As with the console suite, a logout →

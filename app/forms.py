@@ -342,6 +342,29 @@ def team_decision_form(
         value=float(defaults.finance.dividend), key=k("div"),
     )
 
+    # --- Planned KPIs (for planning-quality scoring) ---
+    st.markdown("##### Planned KPIs")
+    st.caption(
+        "Your forecast for the period. Scored against actuals — see the "
+        "Planning quality tab."
+    )
+    j1, j2, j3 = st.columns(3)
+    planned_revenue = j1.number_input(
+        "Planned revenue (€)", min_value=0.0, step=1_000_000.0,
+        value=float(defaults.finance.planned_kpis.revenue),
+        key=k("plan_rev"),
+    )
+    planned_roe_pct = j2.number_input(
+        "Planned return on equity (%)", step=0.5,
+        value=float(defaults.finance.planned_kpis.return_on_equity * 100),
+        key=k("plan_roe"),
+    )
+    planned_ocf = j3.number_input(
+        "Planned operating cash flow (€)", step=1_000_000.0,
+        value=float(defaults.finance.planned_kpis.operating_cash_flow),
+        key=k("plan_ocf"),
+    )
+
     return TeamDecision(
         team_id=team_id,
         period=period,
@@ -373,6 +396,10 @@ def team_decision_form(
             long_term_loan=lt_loan,
             securities_purchase=securities,
             dividend=dividend,
-            planned_kpis=PlannedKPIs(),
+            planned_kpis=PlannedKPIs(
+                revenue=planned_revenue,
+                return_on_equity=planned_roe_pct / 100.0,
+                operating_cash_flow=planned_ocf,
+            ),
         ),
     )

@@ -86,6 +86,20 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at   TEXT NOT NULL,
     PRIMARY KEY (cohort_id, team_id, period_index)
 );
+
+-- Pedagogy layer: one balanced-scorecard strategy map per (cohort, team).
+-- Each perspective is freeform Markdown; see docs/spec/09-pedagogy.md §2.
+CREATE TABLE IF NOT EXISTS strategy_maps (
+    cohort_id        INTEGER NOT NULL REFERENCES cohorts(id),
+    team_id          INTEGER NOT NULL REFERENCES teams(id),
+    financial        TEXT NOT NULL DEFAULT '',
+    customer         TEXT NOT NULL DEFAULT '',
+    internal_process TEXT NOT NULL DEFAULT '',
+    learning_growth  TEXT NOT NULL DEFAULT '',
+    updated_by       INTEGER REFERENCES users(id),
+    updated_at       TEXT NOT NULL,
+    PRIMARY KEY (cohort_id, team_id)
+);
 """
 
 
@@ -420,5 +434,60 @@ class Database:
                 "SELECT * FROM reports WHERE cohort_id = ? "
                 "AND period_index = ? ORDER BY team_id",
                 (cohort_id, period_index),
+            ).fetchall()
+            return list(rows)
+
+    # -- strategy maps -------------------------------------------------------
+
+    def get_strategy_map(
+        self, cohort_id: int, team_id: int
+    ) -> Optional[sqlite3.Row]:
+        with self._tx() as conn:
+            return conn.execute(
+                "SELECT * FROM strategy_maps WHERE cohort_id = ? "
+                "AND team_id = ?",
+                (cohort_id, team_id),
+            ).fetchone()
+
+    def upsert_strategy_map(
+        self,
+        cohort_id: int,
+        team_id: int,
+        financial: str,
+        customer: str,
+        internal_process: str,
+        learning_growth: str,
+        updated_by: Optional[int],
+    ) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "INSERT INTO strategy_maps (cohort_id, team_id, financial, "
+                "customer, internal_process, learning_growth, updated_by, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(cohort_id, team_id) DO UPDATE SET "
+                "financial = excluded.financial, "
+                "customer = excluded.customer, "
+                "internal_process = excluded.internal_process, "
+                "learning_growth = excluded.learning_growth, "
+                "updated_by = excluded.updated_by, "
+                "updated_at = excluded.updated_at",
+                (
+                    cohort_id,
+                    team_id,
+                    financial,
+                    customer,
+                    internal_process,
+                    learning_growth,
+                    updated_by,
+                    _now(),
+                ),
+            )
+
+    def list_strategy_maps(self, cohort_id: int) -> List[sqlite3.Row]:
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM strategy_maps WHERE cohort_id = ? "
+                "ORDER BY team_id",
+                (cohort_id,),
             ).fetchall()
             return list(rows)

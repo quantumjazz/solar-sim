@@ -246,6 +246,17 @@ play patterns. Sources used:
 - **Day, G. S.** (1981). *The Product Life Cycle: Analysis and Applications
   Issues.* *Journal of Marketing*, 45(4): 60–67.
 
+### Forecast accuracy and planning-quality scoring
+
+- **Hyndman, R. J., Athanasopoulos, G.** (2021). *Forecasting: Principles and
+  Practice* (3rd ed.). OTexts, Melbourne. Free online at
+  `https://otexts.com/fpp3/`. Chapter 5 ("The forecaster's toolbox") defines
+  the symmetric mean absolute percentage error (sMAPE) used as the
+  planning-quality KPI score in `09-pedagogy.md`.
+- **Makridakis, S.** (1993). *Accuracy Measures: Theoretical and Practical
+  Concerns.* *International Journal of Forecasting*, 9(4): 527–529. The
+  paper that introduced sMAPE as a symmetric, bounded alternative to MAPE.
+
 ### Peer assessment in team-based learning
 
 - **Topping, K. J.** (2009). *Peer Assessment.* *Theory Into Practice*, 48(1):

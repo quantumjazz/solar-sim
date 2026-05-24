@@ -174,3 +174,27 @@ are all standard library. A logged-in session lives in Streamlit
 cookie-based persistence, real-time updates, and the graded pedagogy layer
 were all deferred.
 **Status: adopted.**
+
+### 21. Pedagogy layer ships in two passes; pass 1 = student-authored artifacts
+
+The pedagogy layer is too big to land in one phase, so it ships in two
+passes. **Pass 1** (this commit) is the student-authored artifacts:
+**planning quality** (per-period plan-vs-actual scoring on the three KPIs
+already carried in `TeamDecision.finance.planned_kpis`) and a freeform
+**balanced-scorecard strategy map** per team. **Pass 2** (a later phase)
+is peer assessment and a board-meeting export.
+
+Planning quality is scored with **symmetric MAPE** per KPI, taking the
+mean across the three KPIs and averaging real periods (trial periods are
+shown but excluded from the headline). sMAPE was chosen over MAPE
+because it is bounded, symmetric, and well-defined on negative ROE and
+negative operating cash flow — both common in the simulation. The
+formula is cited to public forecasting literature (`docs/sources.md` §8:
+Makridakis 1993; Hyndman & Athanasopoulos 2021); the spec is in
+`docs/spec/09-pedagogy.md`.
+
+The strategy map is **freeform Markdown per balanced-scorecard
+perspective**, not algorithmically graded — the instructor reviews each
+team's map against the course rubric. The MVP keeps only the current
+version (no edit history). The engine was not touched in either case.
+**Status: adopted.**

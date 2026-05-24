@@ -135,6 +135,30 @@ submitted (or with an explicit override that uses current drafts).
 `run_period` validates all decisions again and either advances the cohort or
 rejects the period.
 
+## Pedagogy layer
+
+A thin layer on top of the simulation, scoring and structuring student work.
+See `docs/spec/09-pedagogy.md` for the formal spec.
+
+**`app/pedagogy.py`** — pure, no DB or UI coupling. Defines the
+`PlanningQualityScore` family of Pydantic models and the
+`StrategyMap` model. Planning quality is scored with **symmetric MAPE**
+on three headline KPIs (revenue, ROE, operating cash flow) — a standard
+forecasting metric, cited in `docs/sources.md` §8 (Makridakis 1993;
+Hyndman & Athanasopoulos 2021). The engine is not touched: planning
+quality is derived from artifacts (`TeamDecision.finance.planned_kpis`,
+the saved `ReportBundle`) the engine already produces.
+
+`service.py` composes per-period scores into a per-team summary via
+`team_planning_quality(cohort, team)`; `get_strategy_map` /
+`save_strategy_map` handle the balanced scorecard. One new table —
+`strategy_maps` — stores four freeform-Markdown perspectives per
+(cohort, team).
+
+In the UI, students get **Planning quality** and **Strategy** tabs;
+instructors get a planning-quality dashboard and a read-only per-team
+strategy viewer.
+
 ## Scenario pack layout
 
 ```

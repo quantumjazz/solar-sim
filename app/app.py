@@ -233,13 +233,25 @@ def _render_cohort_detail(cohort) -> None:
     c2.metric("Teams", len(db.list_teams(cohort_id)))
     c3.metric("Status", "Finished" if finished else f"Period {upcoming} open")
 
-    tabs = st.tabs(["Run period", "Teams & members", "Reports"])
+    tabs = st.tabs(
+        [
+            "Run period",
+            "Teams & members",
+            "Reports",
+            "Planning quality",
+            "Strategy maps",
+        ]
+    )
     with tabs[0]:
         _render_run_panel(cohort)
     with tabs[1]:
         _render_members(cohort)
     with tabs[2]:
         _render_reports(cohort, role="instructor")
+    with tabs[3]:
+        _render_planning_quality(cohort, role="instructor")
+    with tabs[4]:
+        _render_strategy(cohort, role="instructor")
 
 
 def _render_run_panel(cohort) -> None:
@@ -395,6 +407,186 @@ def _render_reports(cohort, role: str, team_id: int = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pedagogy: planning quality
+# ---------------------------------------------------------------------------
+
+
+def _fmt_kpi(name: str, value: float) -> str:
+    """KPI-aware formatting: ROE as percent, money as compact EUR."""
+    if name == "Return on equity":
+        return f"{value:.1%}"
+    if abs(value) >= 1_000_000:
+        return f"€{value / 1_000_000:,.2f}m"
+    if abs(value) >= 1_000:
+        return f"€{value / 1_000:,.1f}k"
+    return f"€{value:,.0f}"
+
+
+def _show_team_planning_quality(tpq, show_headline: bool = True) -> None:
+    if not tpq.periods:
+        st.caption("No periods scored yet.")
+        return
+    if show_headline:
+        col_h, col_n = st.columns(2)
+        if tpq.headline_score is not None:
+            col_h.metric(
+                "Planning quality (real periods)",
+                f"{tpq.headline_score:.1%}",
+            )
+        else:
+            col_h.metric("Planning quality (real periods)", "—")
+        col_n.metric("Real periods scored", tpq.real_period_count)
+        if tpq.headline_score is None and tpq.periods:
+            st.caption(
+                "Trial periods are scored below; the headline begins once "
+                "the first real period is complete."
+            )
+    for p in tpq.periods:
+        label = "Real" if p.is_real_period else "Trial"
+        st.markdown(
+            f"**Period {p.period}** · {label} · period score **{p.period_score:.1%}**"
+        )
+        st.dataframe(
+            [
+                {
+                    "KPI": k.name,
+                    "Planned": _fmt_kpi(k.name, k.planned),
+                    "Actual": _fmt_kpi(k.name, k.actual),
+                    "Score": f"{k.score:.1%}",
+                }
+                for k in p.kpis
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+
+
+def _render_planning_quality(cohort, role: str, team_id: int = None) -> None:
+    svc = _svc()
+    db = _get_db()
+    cohort_id = cohort["id"]
+
+    if cohort["current_period"] < 1:
+        st.info("Planning quality appears after the first period has been run.")
+        return
+
+    if role == "student":
+        _show_team_planning_quality(svc.team_planning_quality(cohort_id, team_id))
+        return
+
+    # Instructor: a headline table across teams, then per-team detail.
+    teams = db.list_teams(cohort_id)
+    table = []
+    for team in teams:
+        tpq = svc.team_planning_quality(cohort_id, team["id"])
+        table.append(
+            {
+                "Team": team["name"],
+                "Real periods scored": tpq.real_period_count,
+                "Headline": (
+                    f"{tpq.headline_score:.1%}"
+                    if tpq.headline_score is not None
+                    else "—"
+                ),
+            }
+        )
+    st.dataframe(table, hide_index=True, width="stretch")
+
+    for team in teams:
+        with st.expander(f"{team['name']} — period-by-period"):
+            _show_team_planning_quality(
+                svc.team_planning_quality(cohort_id, team["id"]),
+                show_headline=False,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Pedagogy: strategy map
+# ---------------------------------------------------------------------------
+
+
+def _render_strategy(
+    cohort, role: str, team_id: int = None, user_id: int = None
+) -> None:
+    svc = _svc()
+    cohort_id = cohort["id"]
+
+    if role == "student":
+        sm = svc.get_strategy_map(cohort_id, team_id)
+        st.markdown(
+            "Author your team's **balanced-scorecard strategy**. Each "
+            "perspective takes freeform Markdown — list objectives, "
+            "measures, targets and initiatives as you see fit."
+        )
+        col_f, col_c = st.columns(2)
+        financial = col_f.text_area(
+            "Financial",
+            value=sm.financial,
+            height=180,
+            key=f"sm_fin_{cohort_id}_{team_id}",
+            help="What financial results does the team aim for?",
+        )
+        customer = col_c.text_area(
+            "Customer",
+            value=sm.customer,
+            height=180,
+            key=f"sm_cus_{cohort_id}_{team_id}",
+            help="How does the team intend to be seen by its customers?",
+        )
+        col_p, col_l = st.columns(2)
+        process = col_p.text_area(
+            "Internal process",
+            value=sm.internal_process,
+            height=180,
+            key=f"sm_ip_{cohort_id}_{team_id}",
+            help="What internal operations does the strategy depend on?",
+        )
+        learning = col_l.text_area(
+            "Learning & growth",
+            value=sm.learning_growth,
+            height=180,
+            key=f"sm_lg_{cohort_id}_{team_id}",
+            help="What capabilities must the team build over the simulation?",
+        )
+        if st.button("Save strategy", type="primary"):
+            svc.save_strategy_map(
+                cohort_id,
+                team_id,
+                financial,
+                customer,
+                process,
+                learning,
+                user_id,
+            )
+            st.toast("Strategy saved.")
+            st.rerun()
+        if sm.updated_at:
+            st.caption(f"Last updated: {sm.updated_at}")
+        return
+
+    # Instructor: read-only view of every team's strategy.
+    db = _get_db()
+    teams = db.list_teams(cohort_id)
+    for team in teams:
+        sm = svc.get_strategy_map(cohort_id, team["id"])
+        suffix = "  ·  empty" if sm.is_empty else ""
+        with st.expander(f"{team['name']}{suffix}"):
+            if sm.is_empty:
+                st.caption("This team has not authored a strategy yet.")
+                continue
+            for label, text in (
+                ("Financial", sm.financial),
+                ("Customer", sm.customer),
+                ("Internal process", sm.internal_process),
+                ("Learning & growth", sm.learning_growth),
+            ):
+                st.markdown(f"**{label}**")
+                st.markdown(text.strip() or "_(empty)_")
+            if sm.updated_at:
+                st.caption(f"Last updated: {sm.updated_at}")
+
+
+# ---------------------------------------------------------------------------
 # Student
 # ---------------------------------------------------------------------------
 
@@ -421,11 +613,17 @@ def _render_student(user: dict) -> None:
     team = db.get_user_team(cohort_id, user["id"])
 
     st.subheader(f"{cohort['name']} — {team['name']}")
-    tabs = st.tabs(["Decision", "Reports"])
+    tabs = st.tabs(["Decision", "Reports", "Planning quality", "Strategy"])
     with tabs[0]:
         _render_student_decision(user, cohort, team)
     with tabs[1]:
         _render_reports(cohort, role="student", team_id=team["id"])
+    with tabs[2]:
+        _render_planning_quality(cohort, role="student", team_id=team["id"])
+    with tabs[3]:
+        _render_strategy(
+            cohort, role="student", team_id=team["id"], user_id=user["id"]
+        )
 
 
 def _render_student_decision(user: dict, cohort, team) -> None:

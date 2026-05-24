@@ -16,7 +16,13 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 import auth
+import pedagogy
 from db import Database
+from pedagogy import (
+    KPILine,
+    PeriodPlanningQuality,
+    TeamPlanningQuality,
+)
 from service import GameService, ServiceError, form_context
 
 _SCENARIO = str(Path(__file__).resolve().parent.parent / "scenarios" / "solar-v1")
@@ -381,3 +387,193 @@ def test_app_instructor_runs_period():
     # The cohort advanced: the run button now targets period 2.
     assert any("Run period 2" in b.label for b in at.button)
     assert db.get_cohort(cohort_id)["current_period"] == 1
+
+
+# ---------------------------------------------------------------------------
+# pedagogy.py — pure scoring (no DB, no Streamlit)
+# ---------------------------------------------------------------------------
+
+
+def test_pedagogy_smape_edge_cases():
+    assert pedagogy.smape(0, 0) == 0.0           # both zero → perfect
+    assert pedagogy.smape(100, 100) == 0.0       # perfect match
+    assert pedagogy.smape(100, 0) == 1.0         # one side zero → max error
+    assert pedagogy.smape(50, -50) == 1.0        # sign flip → max error
+    assert abs(pedagogy.smape(100, 200) - 100 / 300) < 1e-12
+
+
+def test_pedagogy_kpi_score_is_one_minus_smape_and_bounded():
+    assert pedagogy.kpi_score(100, 100) == 1.0
+    assert pedagogy.kpi_score(50, -50) == 0.0
+    # Bounded [0, 1] by triangle inequality, across many random inputs.
+    import random
+    rng = random.Random(42)
+    for _ in range(500):
+        p, a = rng.uniform(-1e9, 1e9), rng.uniform(-1e9, 1e9)
+        assert 0.0 <= pedagogy.kpi_score(p, a) <= 1.0
+
+
+def _period(period: int, is_real: bool, score: float) -> PeriodPlanningQuality:
+    return PeriodPlanningQuality(
+        period=period,
+        is_real_period=is_real,
+        kpis=[KPILine(name="x", planned=0, actual=0, score=score)],
+        period_score=score,
+    )
+
+
+def test_pedagogy_team_quality_headline_uses_only_real_periods():
+    tpq = TeamPlanningQuality.from_periods(
+        99,
+        [
+            _period(1, False, 0.50),
+            _period(4, True, 0.80),
+            _period(5, True, 0.60),
+        ],
+    )
+    assert tpq.real_period_count == 2
+    assert abs(tpq.headline_score - 0.70) < 1e-12
+
+
+def test_pedagogy_team_quality_no_real_periods_yields_none_headline():
+    tpq = TeamPlanningQuality.from_periods(
+        99, [_period(1, False, 0.5), _period(2, False, 0.6)]
+    )
+    assert tpq.headline_score is None
+    assert tpq.real_period_count == 0
+
+
+def test_pedagogy_strategy_map_is_empty_only_when_blank():
+    sm = pedagogy.StrategyMap(cohort_id=1, team_id=1)
+    assert sm.is_empty
+    sm.financial = "   "
+    assert sm.is_empty  # whitespace only is still empty
+    sm.financial = "be #1"
+    assert not sm.is_empty
+
+
+# ---------------------------------------------------------------------------
+# db.py — strategy_maps
+# ---------------------------------------------------------------------------
+
+
+def test_db_strategy_map_crud(db):
+    uid = db.create_user("i@x.c", "I", "h", "instructor")
+    cid = db.create_cohort("C", "/p", uid)
+    tid = db.create_team(cid, "c1", "T")
+    assert db.get_strategy_map(cid, tid) is None
+    db.upsert_strategy_map(cid, tid, "fin", "cus", "ip", "lg", uid)
+    row = db.get_strategy_map(cid, tid)
+    assert row["financial"] == "fin"
+    assert row["customer"] == "cus"
+    assert row["internal_process"] == "ip"
+    assert row["learning_growth"] == "lg"
+    # Upsert overwrites.
+    db.upsert_strategy_map(cid, tid, "fin2", "cus2", "ip2", "lg2", uid)
+    row = db.get_strategy_map(cid, tid)
+    assert row["financial"] == "fin2"
+    assert [r["team_id"] for r in db.list_strategy_maps(cid)] == [tid]
+
+
+# ---------------------------------------------------------------------------
+# service.py — pedagogy
+# ---------------------------------------------------------------------------
+
+
+def test_service_strategy_map_roundtrip(svc, db, cohort, instructor):
+    team = db.list_teams(cohort)[0]
+    assert svc.get_strategy_map(cohort, team["id"]).is_empty
+    svc.save_strategy_map(
+        cohort, team["id"],
+        "Cost leadership", "Quality leader", "Lean ops", "Train everyone",
+        instructor,
+    )
+    sm = svc.get_strategy_map(cohort, team["id"])
+    assert sm.financial == "Cost leadership"
+    assert sm.customer == "Quality leader"
+    assert not sm.is_empty
+
+
+def test_service_planning_quality_scores_after_period(svc, db, cohort):
+    teams = db.list_teams(cohort)
+    for team in teams:
+        decision = svc.get_decision(cohort, team["id"], 1)
+        decision.finance.planned_kpis.revenue = 100_000_000
+        decision.finance.planned_kpis.return_on_equity = 0.05
+        decision.finance.planned_kpis.operating_cash_flow = 5_000_000
+        svc.submit_decision(cohort, team["id"], 1, decision, 1)
+    svc.run_next_period(cohort)
+
+    tpq = svc.team_planning_quality(cohort, teams[0]["id"])
+    assert len(tpq.periods) == 1
+    p = tpq.periods[0]
+    assert p.period == 1
+    # solar-v1 sets trial_periods=[1,2,3]; period 1 is trial.
+    assert p.is_real_period is False
+    assert {k.name for k in p.kpis} == {
+        "Revenue",
+        "Return on equity",
+        "Operating cash flow",
+    }
+    assert 0.0 <= p.period_score <= 1.0
+    # No real period has run yet → no headline.
+    assert tpq.headline_score is None
+    assert tpq.real_period_count == 0
+
+
+def test_service_planning_quality_before_first_period_is_empty(svc, cohort):
+    teams = svc.db.list_teams(cohort)
+    tpq = svc.team_planning_quality(cohort, teams[0]["id"])
+    assert tpq.periods == []
+    assert tpq.headline_score is None
+
+
+# ---------------------------------------------------------------------------
+# app.py — pedagogy tabs (AppTest)
+# ---------------------------------------------------------------------------
+
+
+def test_app_student_sees_planning_quality_tab_after_period():
+    db = Database(os.environ["SOLAR_SIM_DB"])
+    svc = GameService(db)
+    iid = auth.register_user(db, "pq_i@uni.edu", "Prof", "password1", "instructor")
+    sid = auth.register_user(db, "pq_s@uni.edu", "Stu", "password1", "student")
+    cid = svc.create_cohort(iid, "PQ Cohort", _SCENARIO, ["Apex"])
+    team = db.list_teams(cid)[0]
+    svc.assign_student(cid, team["id"], sid)
+    decision = svc.get_decision(cid, team["id"], 1)
+    decision.finance.planned_kpis.revenue = 100_000_000
+    decision.finance.planned_kpis.return_on_equity = 0.05
+    decision.finance.planned_kpis.operating_cash_flow = 5_000_000
+    svc.submit_decision(cid, team["id"], 1, decision, sid)
+    svc.run_next_period(cid)
+
+    at = _login(_fresh_app(), "pq_s@uni.edu")
+    tab_labels = {tab.label for tab in at.tabs}
+    assert {"Planning quality", "Strategy"} <= tab_labels
+    # The planning-quality detail renders Period 1 as "Trial" (real_periods 4+).
+    rendered = " ".join(str(m.value) for m in at.markdown)
+    assert "Period 1" in rendered and "Trial" in rendered
+
+
+def test_app_student_saves_strategy_map():
+    db = Database(os.environ["SOLAR_SIM_DB"])
+    svc = GameService(db)
+    iid = auth.register_user(db, "sm_i@uni.edu", "Prof", "password1", "instructor")
+    sid = auth.register_user(db, "sm_s@uni.edu", "Stu", "password1", "student")
+    cid = svc.create_cohort(iid, "SM Cohort", _SCENARIO, ["Helios"])
+    team = db.list_teams(cid)[0]
+    svc.assign_student(cid, team["id"], sid)
+
+    at = _login(_fresh_app(), "sm_s@uni.edu")
+    at.text_area(key=f"sm_fin_{cid}_{team['id']}").set_value("Be #1 on cost")
+    at.text_area(key=f"sm_cus_{cid}_{team['id']}").set_value("Quality leader")
+    at.text_area(key=f"sm_ip_{cid}_{team['id']}").set_value("Lean ops")
+    at.text_area(key=f"sm_lg_{cid}_{team['id']}").set_value("Train everyone")
+    next(b for b in at.button if b.label == "Save strategy").click().run()
+    assert not at.exception, at.exception
+    sm = svc.get_strategy_map(cid, team["id"])
+    assert sm.financial == "Be #1 on cost"
+    assert sm.customer == "Quality leader"
+    assert sm.internal_process == "Lean ops"
+    assert sm.learning_growth == "Train everyone"

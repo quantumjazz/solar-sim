@@ -29,7 +29,7 @@ streamlit run app/app.py                 # multi-user app (logins + SQLite)
 streamlit run app/instructor_console.py  # single-operator console (no DB)
 ```
 
-As of 2026-05-22: 28 engine tests + 26 app tests, all passing. Runtime
+As of 2026-05-22: 28 engine tests + 37 app tests, all passing. Runtime
 dependencies: `pydantic` (v2), `pyyaml`, `streamlit`. The multi-user app
 also uses `sqlite3`, `hashlib`, and `secrets` — all from the standard
 library. Test dependency: `pytest`. There is no build step.
@@ -52,10 +52,11 @@ app/                 Streamlit front ends (depend on the engine)
   db.py                SQLite schema + CRUD
   auth.py              account hashing, register / login
   service.py           bridges the database to the engine
+  pedagogy.py          planning-quality scoring + StrategyMap model (pure)
   forms.py / views.py  decision-entry forms / report rendering (shared)
   instructor_console.py  single-operator console (no database)
-docs/                spec/, sources.md, calibration.md, architecture.md,
-                     current-task.md, decisions.md, testing.md
+docs/                spec/ (incl. 09-pedagogy.md), sources.md, calibration.md,
+                     architecture.md, current-task.md, decisions.md, testing.md
 ```
 
 Public API: `load_scenario_pack`, `build_initial_state`, `run_period`,

@@ -30,13 +30,21 @@ The cohort database is `solar-sim.db` at the repository root; set the
 deployment — the instructor runs the app and students connect over the
 local network. Register the first instructor account from the login screen.
 
-Three modules sit under `app.py`:
+Four modules sit under `app.py`:
 
 | Module | Responsibility |
 | --- | --- |
 | `db.py` | SQLite schema and CRUD — the only module that touches SQLite. |
 | `auth.py` | PBKDF2 password hashing (stdlib), register / login. |
-| `service.py` | `GameService` — bridges the database to the engine: create a cohort, save / submit decisions, run a period, fetch reports. |
+| `service.py` | `GameService` — bridges the database to the engine: create a cohort, save / submit decisions, run a period, fetch reports, score planning quality, store / load the strategy map. |
+| `pedagogy.py` | Planning-quality scoring (sMAPE) and the `StrategyMap` model — pure, no DB / Streamlit dependency. See `docs/spec/09-pedagogy.md`. |
+
+The multi-user app also surfaces the **pedagogy layer**: students get a
+**Planning quality** tab (period-by-period plan-vs-actual scoring across
+three KPIs — revenue, ROE, operating cash flow) and a **Strategy** tab
+(freeform Markdown balanced-scorecard authoring across the four classical
+perspectives). Instructors get a cohort planning-quality dashboard and a
+read-only per-team strategy-map viewer.
 
 ## Instructor console — `instructor_console.py`
 
@@ -57,11 +65,12 @@ app/
 ├── db.py                   SQLite schema + CRUD
 ├── auth.py                 accounts: hashing, register, login
 ├── service.py              database-to-engine bridge (GameService)
+├── pedagogy.py             planning-quality scoring + StrategyMap model (pure)
 ├── instructor_console.py   single-operator console (entry point)
 ├── forms.py                decision-entry form builders (shared)
 ├── views.py                report-rendering helpers (shared)
 ├── test_app.py             AppTest smoke test for the console
-├── test_phase3.py          db / auth / service + AppTest tests for app.py
+├── test_phase3.py          db / auth / service / pedagogy + AppTest tests
 └── README.md               this file
 ```
 
@@ -77,9 +86,10 @@ PYTHONPATH=sim-engine/src:app python3 -m pytest app/
 ```
 
 `test_app.py` (4 tests) drives the console headlessly with Streamlit's
-`AppTest`. `test_phase3.py` (22 tests) covers the database, accounts, and
-the game service directly, plus `AppTest` smoke tests of `app.py` —
-including an end-to-end student submission and an instructor period run.
+`AppTest`. `test_phase3.py` (33 tests) covers the database, accounts, the
+game service, and the pedagogy scoring directly, plus `AppTest` smoke
+tests of `app.py` — including an end-to-end student submission, an
+instructor period run, and a student saving a strategy map.
 
 ## Known limitations (multi-user app)
 
