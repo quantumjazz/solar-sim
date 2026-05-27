@@ -56,6 +56,22 @@ class ProductionLineState(BaseModel):
     cumulative_rationalisation: float = 0
 
 
+class CommittedTender(BaseModel):
+    """A won tender that has yet to be delivered.
+
+    The bid resolves immediately (the team knows they have won), but the
+    units only ship — and revenue only books — in `delivery_period`. See
+    docs/spec/01-sales.md §3.1.
+    """
+
+    won_in_period: int
+    product: str
+    market: str
+    units: int
+    bid_price: float
+    delivery_period: int
+
+
 class ProductState(BaseModel):
     """Per-product state for a company.
 
@@ -199,6 +215,18 @@ class CompanyState(BaseModel):
     # Cumulative spend trackers
     cumulative_env_capex: float = 0
     environmental_tech_nbv: float = 0
+
+    # Insolvency flag (sticky — once True, stays True; see
+    # docs/spec/05-finance.md §11).
+    is_bankrupt: bool = False
+
+    # Won-but-undelivered tenders carried across periods (01-sales.md §3.1).
+    committed_tenders: List[CommittedTender] = Field(default_factory=list)
+
+    # Equity value per share — updated each period from drivers per
+    # docs/spec/05-finance.md §5. Defaults to the period-0 reference for
+    # solar-v1.
+    share_price: float = 113.8
 
 
 class PeriodState(BaseModel):

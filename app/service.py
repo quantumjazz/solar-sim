@@ -13,6 +13,7 @@ Pydantic's `model_dump_json` / `model_validate_json`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -30,12 +31,21 @@ from sim_engine.scenario import (
 from sim_engine.state import PeriodState
 from sim_engine.validation import validate_decision
 
+from board_export import (
+    PeerRatingWithNames,
+    TeamBoardData,
+    render_document,
+)
 from db import Database
 from forms import default_decision
 from pedagogy import (
+    PEER_DIMENSIONS,
+    AggregatedRating,
+    PeerRating,
     PeriodPlanningQuality,
     StrategyMap,
     TeamPlanningQuality,
+    aggregate_ratings,
 )
 
 
@@ -509,3 +519,225 @@ class GameService:
             learning_growth,
             user_id,
         )
+
+    # -- pedagogy: peer assessment ------------------------------------------
+
+    def team_peer_targets(
+        self, cohort_id: int, user_id: int
+    ) -> List:
+        """Teammates of `user_id` in `cohort_id`, excluding the user.
+
+        Returns the user-row list; empty if the user isn't on a team here.
+        """
+        team = self.db.get_user_team(cohort_id, user_id)
+        if team is None:
+            return []
+        return [
+            m for m in self.db.list_team_members(team["id"]) if m["id"] != user_id
+        ]
+
+    def get_my_rating(
+        self, cohort_id: int, rater_id: int, ratee_id: int
+    ) -> Optional[PeerRating]:
+        row = self.db.get_peer_rating(cohort_id, rater_id, ratee_id)
+        return self._row_to_peer_rating(row) if row is not None else None
+
+    def save_peer_rating(
+        self,
+        cohort_id: int,
+        rater_id: int,
+        ratee_id: int,
+        contribution: int,
+        collaboration: int,
+        reliability: int,
+        communication: int,
+        comments: str,
+    ) -> None:
+        """Validate and persist one (rater, ratee) rating.
+
+        Enforces the three rules from `09-pedagogy.md` §3.4 that the schema
+        cannot: rater ≠ ratee, both on the same team in this cohort, and
+        the cohort is still active.
+        """
+        cohort = self.db.get_cohort(cohort_id)
+        if cohort is None:
+            raise ServiceError(f"Cohort {cohort_id} does not exist.")
+        if cohort["status"] == "finished":
+            raise ServiceError(
+                "This cohort has finished — peer ratings are locked."
+            )
+        if rater_id == ratee_id:
+            raise ServiceError("You cannot rate yourself.")
+        rater_team = self.db.get_user_team(cohort_id, rater_id)
+        ratee_team = self.db.get_user_team(cohort_id, ratee_id)
+        if (
+            rater_team is None
+            or ratee_team is None
+            or rater_team["id"] != ratee_team["id"]
+        ):
+            raise ServiceError(
+                "Rater and ratee must be on the same team in this cohort."
+            )
+        for dim, value in (
+            ("contribution", contribution),
+            ("collaboration", collaboration),
+            ("reliability", reliability),
+            ("communication", communication),
+        ):
+            if not isinstance(value, int) or not 1 <= value <= 5:
+                raise ServiceError(f"{dim} must be an integer in 1-5 (got {value!r}).")
+        self.db.upsert_peer_rating(
+            cohort_id,
+            rater_id,
+            ratee_id,
+            contribution,
+            collaboration,
+            reliability,
+            communication,
+            comments,
+        )
+
+    def my_aggregated_rating(
+        self, cohort_id: int, user_id: int
+    ) -> Optional[AggregatedRating]:
+        """The user's own aggregated rating, **only after the cohort closes**.
+
+        Returns `None` while the cohort is still active — per
+        `09-pedagogy.md` §3.3 the ratee does not see their ratings until
+        the cohort is finished.
+        """
+        cohort = self.db.get_cohort(cohort_id)
+        if cohort is None or cohort["status"] != "finished":
+            return None
+        rows = self.db.list_peer_ratings_by_ratee(cohort_id, user_id)
+        return aggregate_ratings(
+            user_id, [self._row_to_peer_rating(r) for r in rows]
+        )
+
+    def team_peer_aggregates(
+        self, cohort_id: int, team_id: int
+    ) -> List[AggregatedRating]:
+        """Per-ratee aggregated ratings within one team — for instructors."""
+        aggs: List[AggregatedRating] = []
+        for member in self.db.list_team_members(team_id):
+            rows = self.db.list_peer_ratings_by_ratee(cohort_id, member["id"])
+            aggs.append(
+                aggregate_ratings(
+                    member["id"],
+                    [self._row_to_peer_rating(r) for r in rows],
+                )
+            )
+        return aggs
+
+    def peer_ratings_for_team(
+        self, cohort_id: int, team_id: int
+    ) -> List[PeerRating]:
+        """Every rating whose rater and ratee are both members of this team."""
+        members = {m["id"] for m in self.db.list_team_members(team_id)}
+        return [
+            self._row_to_peer_rating(r)
+            for r in self.db.list_peer_ratings(cohort_id)
+            if r["rater_id"] in members and r["ratee_id"] in members
+        ]
+
+    @staticmethod
+    def _row_to_peer_rating(row) -> PeerRating:
+        return PeerRating(
+            cohort_id=row["cohort_id"],
+            rater_id=row["rater_id"],
+            ratee_id=row["ratee_id"],
+            contribution=row["contribution"],
+            collaboration=row["collaboration"],
+            reliability=row["reliability"],
+            communication=row["communication"],
+            comments=row["comments"],
+            updated_at=row["updated_at"],
+        )
+
+    # -- pedagogy: board-meeting export -------------------------------------
+
+    def build_board_document(
+        self,
+        cohort_id: int,
+        team_id: int,
+        viewer_role: str,
+        viewer_user_id: Optional[int] = None,
+    ) -> str:
+        """Render the full board-meeting Markdown document for one team.
+
+        Fetches per-period reports, planning quality, strategy map, and
+        peer aggregates from the database, applies the viewer-role
+        visibility rules from `09-pedagogy.md` §4.3, and calls
+        `board_export.render_document`.
+        """
+        cohort = self.db.get_cohort(cohort_id)
+        if cohort is None:
+            raise ServiceError(f"Cohort {cohort_id} does not exist.")
+        team = self.db.get_team(team_id)
+        if team is None or team["cohort_id"] != cohort_id:
+            raise ServiceError(
+                f"Team {team_id} is not in cohort {cohort_id}."
+            )
+
+        pack = load_scenario_pack(cohort["scenario_path"])
+        members = self.db.list_team_members(team_id)
+        member_names = [m["display_name"] for m in members]
+        name_by_id = {m["id"]: m["display_name"] for m in members}
+
+        completed = int(cohort["current_period"])
+        period_bundles: List[ReportBundle] = []
+        for period in range(1, completed + 1):
+            raw = self.db.get_report(cohort_id, team_id, period)
+            if raw is not None:
+                period_bundles.append(ReportBundle.model_validate_json(raw))
+
+        final_industry = (
+            self.get_industry_report(cohort_id, completed)
+            if completed >= 1
+            else None
+        )
+        tpq = (
+            self.team_planning_quality(cohort_id, team_id)
+            if completed >= 1
+            else None
+        )
+        strategy = self.get_strategy_map(cohort_id, team_id)
+
+        own_aggregate: Optional[AggregatedRating] = None
+        team_aggs: List[AggregatedRating] = []
+        detailed: List[PeerRatingWithNames] = []
+        if viewer_role == "student" and viewer_user_id is not None:
+            own_aggregate = self.my_aggregated_rating(cohort_id, viewer_user_id)
+        elif viewer_role == "instructor":
+            team_aggs = self.team_peer_aggregates(cohort_id, team_id)
+            for rating in self.peer_ratings_for_team(cohort_id, team_id):
+                detailed.append(
+                    PeerRatingWithNames(
+                        rater_name=name_by_id.get(
+                            rating.rater_id, f"user #{rating.rater_id}"
+                        ),
+                        ratee_name=name_by_id.get(
+                            rating.ratee_id, f"user #{rating.ratee_id}"
+                        ),
+                        rating=rating,
+                    )
+                )
+
+        data = TeamBoardData(
+            cohort_name=cohort["name"],
+            cohort_status=cohort["status"],
+            scenario_id=pack.pack.scenario.id,
+            team_name=team["name"],
+            team_company_id=team["company_id"],
+            member_names=member_names,
+            final_industry_report=final_industry,
+            period_bundles=period_bundles,
+            planning_quality=tpq,
+            strategy_map=strategy,
+            own_peer_aggregate=own_aggregate,
+            team_peer_aggregates=team_aggs,
+            detailed_peer_ratings=detailed,
+            viewer_role=viewer_role,
+            generated_at=date.today().isoformat(),
+        )
+        return render_document(data)

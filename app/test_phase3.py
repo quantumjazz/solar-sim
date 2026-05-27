@@ -16,12 +16,21 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 import auth
+import board_export
 import pedagogy
+import sqlite3
+from pydantic import ValidationError
+
+from board_export import PeerRatingWithNames, TeamBoardData, render_document
 from db import Database
 from pedagogy import (
+    AggregatedRating,
     KPILine,
+    PeerRating,
     PeriodPlanningQuality,
+    StrategyMap,
     TeamPlanningQuality,
+    aggregate_ratings,
 )
 from service import GameService, ServiceError, form_context
 
@@ -577,3 +586,490 @@ def test_app_student_saves_strategy_map():
     assert sm.customer == "Quality leader"
     assert sm.internal_process == "Lean ops"
     assert sm.learning_growth == "Train everyone"
+
+
+# ---------------------------------------------------------------------------
+# pedagogy.py — peer-assessment models (pure)
+# ---------------------------------------------------------------------------
+
+
+def test_pedagogy_peer_rating_validates_dimension_range():
+    # Each dimension must be an integer in 1..5.
+    with pytest.raises(ValidationError):
+        PeerRating(
+            cohort_id=1, rater_id=1, ratee_id=2,
+            contribution=0, collaboration=3, reliability=3, communication=3,
+        )
+    with pytest.raises(ValidationError):
+        PeerRating(
+            cohort_id=1, rater_id=1, ratee_id=2,
+            contribution=6, collaboration=3, reliability=3, communication=3,
+        )
+    # 1 and 5 are accepted.
+    r = PeerRating(
+        cohort_id=1, rater_id=1, ratee_id=2,
+        contribution=1, collaboration=5, reliability=3, communication=4,
+    )
+    assert r.overall == (1 + 5 + 3 + 4) / 4
+
+
+def test_pedagogy_aggregate_ratings_empty():
+    agg = aggregate_ratings(ratee_id=99, ratings=[])
+    assert agg.n_raters == 0
+    assert agg.contribution_mean is None
+    assert agg.overall_mean is None
+
+
+def _r(rater, ratee, c, co, re, cm):
+    return PeerRating(
+        cohort_id=1, rater_id=rater, ratee_id=ratee,
+        contribution=c, collaboration=co, reliability=re, communication=cm,
+    )
+
+
+def test_pedagogy_aggregate_ratings_means_and_filtering():
+    # Multiple ratings, multiple ratees; aggregate only for ratee_id=2.
+    ratings = [
+        _r(1, 2, 5, 5, 5, 5),
+        _r(3, 2, 3, 4, 4, 4),
+        _r(1, 4, 1, 1, 1, 1),  # ignored — different ratee
+    ]
+    agg = aggregate_ratings(ratee_id=2, ratings=ratings)
+    assert agg.n_raters == 2
+    assert abs(agg.contribution_mean - 4.0) < 1e-12
+    assert abs(agg.collaboration_mean - 4.5) < 1e-12
+    assert abs(agg.reliability_mean - 4.5) < 1e-12
+    assert abs(agg.communication_mean - 4.5) < 1e-12
+    # Overall is the mean of the four dimension means.
+    assert abs(agg.overall_mean - (4.0 + 4.5 + 4.5 + 4.5) / 4) < 1e-12
+
+
+# ---------------------------------------------------------------------------
+# db.py — peer_ratings
+# ---------------------------------------------------------------------------
+
+
+def test_db_peer_ratings_crud(db):
+    iid = db.create_user("i@x.c", "I", "h", "instructor")
+    a = db.create_user("a@x.c", "Alice", "h", "student")
+    b = db.create_user("b@x.c", "Bob", "h", "student")
+    cid = db.create_cohort("C", "/p", iid)
+    db.upsert_peer_rating(cid, a, b, 5, 4, 5, 4, "ok")
+    row = db.get_peer_rating(cid, a, b)
+    assert row["contribution"] == 5
+    assert row["comments"] == "ok"
+    # Upsert overwrites and updates the timestamp.
+    first_updated = row["updated_at"]
+    db.upsert_peer_rating(cid, a, b, 3, 3, 3, 3, "revised")
+    row = db.get_peer_rating(cid, a, b)
+    assert row["contribution"] == 3
+    assert row["comments"] == "revised"
+    assert row["updated_at"] >= first_updated
+    # Listings.
+    assert [r["ratee_id"] for r in db.list_peer_ratings_by_rater(cid, a)] == [b]
+    assert [r["rater_id"] for r in db.list_peer_ratings_by_ratee(cid, b)] == [a]
+    assert len(db.list_peer_ratings(cid)) == 1
+    # Delete.
+    db.delete_peer_rating(cid, a, b)
+    assert db.get_peer_rating(cid, a, b) is None
+
+
+def test_db_peer_ratings_check_constraint_rejects_out_of_range(db):
+    iid = db.create_user("i@x.c", "I", "h", "instructor")
+    a = db.create_user("a@x.c", "Alice", "h", "student")
+    b = db.create_user("b@x.c", "Bob", "h", "student")
+    cid = db.create_cohort("C", "/p", iid)
+    # The schema CHECK constraint catches out-of-range scores.
+    with pytest.raises(sqlite3.IntegrityError):
+        db.upsert_peer_rating(cid, a, b, 0, 3, 3, 3, "")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.upsert_peer_rating(cid, a, b, 3, 3, 3, 6, "")
+
+
+# ---------------------------------------------------------------------------
+# service.py — peer-assessment validation and visibility
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def peer_cohort(svc, db, instructor):
+    """A cohort with two students on one team and two on another."""
+    cid = svc.create_cohort(
+        instructor, "Peer Cohort", _SCENARIO, ["Apex", "Vega"]
+    )
+    alice = auth.register_user(db, "alice@u.e", "Alice", "password1", "student")
+    bob = auth.register_user(db, "bob@u.e", "Bob", "password1", "student")
+    carol = auth.register_user(db, "carol@u.e", "Carol", "password1", "student")
+    dave = auth.register_user(db, "dave@u.e", "Dave", "password1", "student")
+    apex, vega = db.list_teams(cid)
+    svc.assign_student(cid, apex["id"], alice)
+    svc.assign_student(cid, apex["id"], bob)
+    svc.assign_student(cid, vega["id"], carol)
+    svc.assign_student(cid, vega["id"], dave)
+    return {"cohort": cid, "apex": apex, "vega": vega,
+            "alice": alice, "bob": bob, "carol": carol, "dave": dave}
+
+
+def test_service_peer_targets_excludes_self_and_other_teams(svc, peer_cohort):
+    targets = svc.team_peer_targets(peer_cohort["cohort"], peer_cohort["alice"])
+    assert [t["id"] for t in targets] == [peer_cohort["bob"]]
+
+
+def test_service_save_peer_rating_rejects_self(svc, peer_cohort):
+    with pytest.raises(ServiceError, match="rate yourself"):
+        svc.save_peer_rating(
+            peer_cohort["cohort"], peer_cohort["alice"], peer_cohort["alice"],
+            3, 3, 3, 3, "",
+        )
+
+
+def test_service_save_peer_rating_rejects_cross_team(svc, peer_cohort):
+    with pytest.raises(ServiceError, match="same team"):
+        svc.save_peer_rating(
+            peer_cohort["cohort"], peer_cohort["alice"], peer_cohort["carol"],
+            3, 3, 3, 3, "",
+        )
+
+
+def test_service_save_peer_rating_rejects_out_of_range(svc, peer_cohort):
+    with pytest.raises(ServiceError, match="1-5"):
+        svc.save_peer_rating(
+            peer_cohort["cohort"], peer_cohort["alice"], peer_cohort["bob"],
+            0, 3, 3, 3, "",
+        )
+
+
+def test_service_save_peer_rating_locked_after_cohort_finishes(svc, db, peer_cohort):
+    db.set_cohort_status(peer_cohort["cohort"], "finished")
+    with pytest.raises(ServiceError, match="locked"):
+        svc.save_peer_rating(
+            peer_cohort["cohort"], peer_cohort["alice"], peer_cohort["bob"],
+            3, 3, 3, 3, "",
+        )
+
+
+def test_service_my_aggregated_rating_hidden_until_cohort_closes(svc, db, peer_cohort):
+    svc.save_peer_rating(
+        peer_cohort["cohort"], peer_cohort["bob"], peer_cohort["alice"],
+        5, 5, 5, 5, "Strong",
+    )
+    # Active cohort: Alice cannot see her aggregated rating yet.
+    assert svc.my_aggregated_rating(peer_cohort["cohort"], peer_cohort["alice"]) is None
+    # Finish the cohort: Alice now sees the aggregate.
+    db.set_cohort_status(peer_cohort["cohort"], "finished")
+    agg = svc.my_aggregated_rating(peer_cohort["cohort"], peer_cohort["alice"])
+    assert agg is not None
+    assert agg.n_raters == 1
+    assert agg.overall_mean == 5.0
+
+
+def test_service_team_peer_aggregates_for_instructor(svc, peer_cohort):
+    svc.save_peer_rating(
+        peer_cohort["cohort"], peer_cohort["alice"], peer_cohort["bob"],
+        4, 5, 5, 4, "",
+    )
+    svc.save_peer_rating(
+        peer_cohort["cohort"], peer_cohort["bob"], peer_cohort["alice"],
+        5, 5, 5, 5, "",
+    )
+    aggs = {
+        a.ratee_id: a
+        for a in svc.team_peer_aggregates(peer_cohort["cohort"], peer_cohort["apex"]["id"])
+    }
+    assert aggs[peer_cohort["alice"]].n_raters == 1
+    assert aggs[peer_cohort["alice"]].overall_mean == 5.0
+    assert aggs[peer_cohort["bob"]].n_raters == 1
+    # Bob got 4 + 5 + 5 + 4 = 18 / 4 = 4.5 overall
+    assert aggs[peer_cohort["bob"]].overall_mean == 4.5
+
+
+# ---------------------------------------------------------------------------
+# app.py — peer review (AppTest)
+# ---------------------------------------------------------------------------
+
+
+def test_app_student_saves_peer_rating_end_to_end():
+    db = Database(os.environ["SOLAR_SIM_DB"])
+    svc = GameService(db)
+    iid = auth.register_user(db, "pr_i@uni.edu", "Prof", "password1", "instructor")
+    a = auth.register_user(db, "pr_alice@uni.edu", "Alice", "password1", "student")
+    b = auth.register_user(db, "pr_bob@uni.edu", "Bob", "password1", "student")
+    cid = svc.create_cohort(iid, "PR Cohort", _SCENARIO, ["Apex"])
+    team = db.list_teams(cid)[0]
+    svc.assign_student(cid, team["id"], a)
+    svc.assign_student(cid, team["id"], b)
+
+    at = _login(_fresh_app(), "pr_alice@uni.edu")
+    assert any(t.label == "Peer review" for t in at.tabs)
+    # Set rating widgets for Bob.
+    at.number_input(key=f"pr_contrib_{cid}_{b}").set_value(5)
+    at.number_input(key=f"pr_collab_{cid}_{b}").set_value(4)
+    at.number_input(key=f"pr_reli_{cid}_{b}").set_value(5)
+    at.number_input(key=f"pr_comm_{cid}_{b}").set_value(4)
+    at.text_area(key=f"pr_text_{cid}_{b}").set_value("Strong partner")
+    next(
+        btn for btn in at.button if btn.label == "Save rating for Bob"
+    ).click().run()
+    assert not at.exception, at.exception
+    rating = svc.get_my_rating(cid, a, b)
+    assert rating is not None
+    assert rating.contribution == 5
+    assert rating.collaboration == 4
+    assert rating.reliability == 5
+    assert rating.communication == 4
+    assert rating.comments == "Strong partner"
+
+
+def test_app_aggregated_rating_visible_only_after_close():
+    db = Database(os.environ["SOLAR_SIM_DB"])
+    svc = GameService(db)
+    iid = auth.register_user(db, "fc_i@uni.edu", "Prof", "password1", "instructor")
+    a = auth.register_user(db, "fc_alice@uni.edu", "Alice", "password1", "student")
+    b = auth.register_user(db, "fc_bob@uni.edu", "Bob", "password1", "student")
+    cid = svc.create_cohort(iid, "FC Cohort", _SCENARIO, ["Apex"])
+    team = db.list_teams(cid)[0]
+    svc.assign_student(cid, team["id"], a)
+    svc.assign_student(cid, team["id"], b)
+    svc.save_peer_rating(cid, b, a, 5, 5, 5, 5, "Excellent")
+
+    # Active cohort: Alice's aggregated rating is not yet shown.
+    at = _login(_fresh_app(), "fc_alice@uni.edu")
+    rendered_active = " ".join(str(m.value) for m in at.markdown)
+    assert "Your peer ratings" not in rendered_active
+
+    # Finish the cohort, log in fresh: aggregated view now appears.
+    db.set_cohort_status(cid, "finished")
+    at2 = _login(_fresh_app(), "fc_alice@uni.edu")
+    rendered_finished = " ".join(str(m.value) for m in at2.markdown)
+    assert "Your peer ratings" in rendered_finished
+
+
+# ---------------------------------------------------------------------------
+# board_export.py — Markdown renderer (pure)
+# ---------------------------------------------------------------------------
+
+
+def _minimal_board_data(**overrides):
+    base = dict(
+        cohort_name="Cohort C",
+        cohort_status="active",
+        scenario_id="solar-v1",
+        team_name="Apex",
+        team_company_id="c1",
+        member_names=["Alice", "Bob"],
+        strategy_map=StrategyMap(cohort_id=1, team_id=1),
+        viewer_role="student",
+        generated_at="2026-05-22",
+    )
+    base.update(overrides)
+    return TeamBoardData(**base)
+
+
+def test_render_document_cover_includes_team_and_cohort():
+    doc = render_document(_minimal_board_data())
+    assert "# Board-meeting document — Apex" in doc
+    assert "Cohort C" in doc
+    assert "solar-v1" in doc
+    assert "Alice, Bob" in doc
+
+
+def test_render_document_handles_empty_state_with_placeholders():
+    doc = render_document(_minimal_board_data())
+    assert "_No periods have been run yet._" in doc
+    assert "_No periods scored yet._" in doc
+    assert "_This team has not authored a strategy map._" in doc
+    # Student view, active cohort → peer section is gated.
+    assert "released once the cohort is finished" in doc
+
+
+def test_render_document_role_filters_peer_comments_to_instructor():
+    rating = PeerRatingWithNames(
+        rater_name="Alice", ratee_name="Bob",
+        rating=PeerRating(
+            cohort_id=1, rater_id=1, ratee_id=2,
+            contribution=4, collaboration=5, reliability=5, communication=4,
+            comments="DRIVES_RESULTS_marker",
+        ),
+    )
+    aggregate = AggregatedRating(
+        ratee_id=2, n_raters=1,
+        contribution_mean=4.0, collaboration_mean=5.0,
+        reliability_mean=5.0, communication_mean=4.0, overall_mean=4.5,
+    )
+    instr_doc = render_document(
+        _minimal_board_data(
+            viewer_role="instructor",
+            detailed_peer_ratings=[rating],
+            team_peer_aggregates=[aggregate],
+        )
+    )
+    stu_doc = render_document(
+        _minimal_board_data(
+            viewer_role="student", detailed_peer_ratings=[rating]
+        )
+    )
+    assert "DRIVES_RESULTS_marker" in instr_doc
+    assert "Per-member aggregates" in instr_doc
+    # Student doc never carries individual comments.
+    assert "DRIVES_RESULTS_marker" not in stu_doc
+    # Student doc, active cohort: gated message instead of aggregates.
+    assert "released once the cohort is finished" in stu_doc
+
+
+def test_md_table_escapes_pipes_and_collapses_newlines():
+    out = board_export._md_table(["A", "B"], [["x|y", "line1\nline2"]])
+    assert "x\\|y" in out
+    assert "line1 / line2" in out
+    assert board_export._md_table(["A"], []) == ""
+
+
+# ---------------------------------------------------------------------------
+# service.py — board document generation
+# ---------------------------------------------------------------------------
+
+
+def _setup_board_cohort(svc, db, instructor):
+    """Cohort with two students on one team, one period run, one peer rating."""
+    cid = svc.create_cohort(instructor, "Spring", _SCENARIO, ["Apex"])
+    alice = auth.register_user(db, "bd_alice@u.e", "Alice", "password1", "student")
+    bob = auth.register_user(db, "bd_bob@u.e", "Bob", "password1", "student")
+    team = db.list_teams(cid)[0]
+    svc.assign_student(cid, team["id"], alice)
+    svc.assign_student(cid, team["id"], bob)
+    decision = svc.get_decision(cid, team["id"], 1)
+    decision.finance.planned_kpis.revenue = 100_000_000
+    decision.finance.planned_kpis.return_on_equity = 0.05
+    decision.finance.planned_kpis.operating_cash_flow = 5_000_000
+    svc.submit_decision(cid, team["id"], 1, decision, instructor)
+    svc.run_next_period(cid)
+    svc.save_strategy_map(
+        cid, team["id"], "Cost lead", "Quality", "Lean", "Train", instructor
+    )
+    svc.save_peer_rating(
+        cid, alice, bob, 4, 5, 5, 4, "MARKER_INSTRUCTOR_ONLY"
+    )
+    return {"cohort": cid, "team_id": team["id"], "alice": alice, "bob": bob}
+
+
+def test_service_board_doc_student_active_hides_peer_data(svc, db, instructor):
+    case = _setup_board_cohort(svc, db, instructor)
+    doc = svc.build_board_document(
+        case["cohort"], case["team_id"], "student",
+        viewer_user_id=case["alice"],
+    )
+    # Student documents never include individual peer comments.
+    assert "MARKER_INSTRUCTOR_ONLY" not in doc
+    # During active cohort, the aggregated section is gated.
+    assert "released once the cohort is finished" in doc
+    # The non-peer sections are present.
+    assert "Period-by-period reports" in doc
+    assert "## Strategy map" in doc
+
+
+def test_service_board_doc_student_finished_shows_own_aggregate(svc, db, instructor):
+    case = _setup_board_cohort(svc, db, instructor)
+    db.set_cohort_status(case["cohort"], "finished")
+    doc = svc.build_board_document(
+        case["cohort"], case["team_id"], "student",
+        viewer_user_id=case["bob"],   # Bob was rated by Alice
+    )
+    assert "Aggregated across" in doc
+    # Comments stay instructor-only even after the cohort closes.
+    assert "MARKER_INSTRUCTOR_ONLY" not in doc
+
+
+def test_service_board_doc_instructor_includes_full_detail(svc, db, instructor):
+    case = _setup_board_cohort(svc, db, instructor)
+    doc = svc.build_board_document(
+        case["cohort"], case["team_id"], "instructor"
+    )
+    assert "Per-member aggregates" in doc
+    assert "MARKER_INSTRUCTOR_ONLY" in doc
+    assert "Detailed ratings" in doc
+    assert "Period-by-period reports" in doc
+
+
+# ---------------------------------------------------------------------------
+# app.py — Board export tab (AppTest)
+# ---------------------------------------------------------------------------
+
+
+def test_app_student_board_export_tab_renders():
+    db = Database(os.environ["SOLAR_SIM_DB"])
+    svc = GameService(db)
+    iid = auth.register_user(db, "be_i@uni.edu", "Prof", "password1", "instructor")
+    sid = auth.register_user(db, "be_s@uni.edu", "Stu", "password1", "student")
+    cid = svc.create_cohort(iid, "BE Cohort", _SCENARIO, ["Apex"])
+    team = db.list_teams(cid)[0]
+    svc.assign_student(cid, team["id"], sid)
+
+    at = _login(_fresh_app(), "be_s@uni.edu")
+    assert any(t.label == "Board export" for t in at.tabs)
+    rendered = " ".join(str(m.value) for m in at.markdown)
+    # The rendered document's H1 appears in the preview.
+    assert "Board-meeting document — Apex" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 polish — cookie-backed sessions
+# ---------------------------------------------------------------------------
+
+
+def test_db_session_crud_and_expiry(db):
+    """create / lookup / delete / purge round-trip with expiry honouring."""
+    from datetime import datetime, timedelta, timezone
+
+    uid = db.create_user("p@x.c", "P", "h", "instructor")
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    db.create_session("tok-active", uid, future)
+    row = db.lookup_session("tok-active")
+    assert row is not None
+    assert int(row["user_id"]) == uid
+
+    past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    db.create_session("tok-expired", uid, past)
+    # Expired tokens don't resolve.
+    assert db.lookup_session("tok-expired") is None
+    # purge_expired clears them out.
+    assert db.purge_expired_sessions() >= 1
+
+    db.delete_session("tok-active")
+    assert db.lookup_session("tok-active") is None
+
+
+def test_auth_create_lookup_end_session(db):
+    """auth.create_session round-trips through lookup_session and end_session."""
+    uid = auth.register_user(db, "s@x.c", "S", "password1", "student")
+    token = auth.create_session(db, uid)
+    assert isinstance(token, str) and len(token) >= 32
+
+    user = auth.lookup_session(db, token)
+    assert user is not None and int(user["id"]) == uid
+
+    auth.end_session(db, token)
+    assert auth.lookup_session(db, token) is None
+    assert auth.lookup_session(db, "made-up-token") is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 polish — instructor draft view (AppTest)
+# ---------------------------------------------------------------------------
+
+
+def test_app_instructor_sees_team_drafts():
+    """The Run-period tab shows a 'Team drafts' section with the team listed."""
+    db = Database(os.environ["SOLAR_SIM_DB"])
+    svc = GameService(db)
+    iid = auth.register_user(db, "drv_i@uni.edu", "Prof", "password1", "instructor")
+    sid = auth.register_user(db, "drv_s@uni.edu", "Stu", "password1", "student")
+    cid = svc.create_cohort(iid, "Drafts Cohort", _SCENARIO, ["Apex"])
+    team = db.list_teams(cid)[0]
+    svc.assign_student(cid, team["id"], sid)
+
+    at = _login(_fresh_app(), "drv_i@uni.edu")
+    assert not at.exception, at.exception
+    rendered = " ".join(str(m.value) for m in at.markdown)
+    assert "Team drafts (read-only)" in rendered
+    # Apex's draft expander label includes its draft tag.
+    expander_labels = [e.label for e in at.expander]
+    assert any("Apex" in label and "draft" in label for label in expander_labels)

@@ -21,7 +21,7 @@ have submitted (an override can run with current drafts). State is shared,
 so the instructor and every student see the same cohort.
 
 ```bash
-pip install streamlit pydantic pyyaml
+pip install streamlit pydantic pyyaml extra-streamlit-components
 streamlit run app/app.py
 ```
 
@@ -30,21 +30,34 @@ The cohort database is `solar-sim.db` at the repository root; set the
 deployment — the instructor runs the app and students connect over the
 local network. Register the first instructor account from the login screen.
 
-Four modules sit under `app.py`:
+Logged-in sessions persist across browser refreshes via an HTTP cookie
+backed by a server-side `sessions` table (7-day expiry). The instructor's
+**Run period** tab auto-refreshes its submission dashboard every 5
+seconds (via `@st.fragment(run_every=5)`), and shows a read-only "Team
+drafts" view of each team's in-progress decision below.
+
+Five modules sit under `app.py`:
 
 | Module | Responsibility |
 | --- | --- |
 | `db.py` | SQLite schema and CRUD — the only module that touches SQLite. |
 | `auth.py` | PBKDF2 password hashing (stdlib), register / login. |
-| `service.py` | `GameService` — bridges the database to the engine: create a cohort, save / submit decisions, run a period, fetch reports, score planning quality, store / load the strategy map. |
-| `pedagogy.py` | Planning-quality scoring (sMAPE) and the `StrategyMap` model — pure, no DB / Streamlit dependency. See `docs/spec/09-pedagogy.md`. |
+| `service.py` | `GameService` — bridges the database to the engine: create a cohort, save / submit decisions, run a period, fetch reports, score planning quality, store / load the strategy map, validate and aggregate peer ratings, generate the board-meeting document. |
+| `pedagogy.py` | Planning-quality scoring (sMAPE), `StrategyMap`, and the `PeerRating` / `AggregatedRating` models — pure, no DB / Streamlit dependency. See `docs/spec/09-pedagogy.md`. |
+| `board_export.py` | Markdown renderer for the board-meeting document — pure, no DB / Streamlit dependency. See `09-pedagogy.md` §4. |
 
 The multi-user app also surfaces the **pedagogy layer**: students get a
 **Planning quality** tab (period-by-period plan-vs-actual scoring across
-three KPIs — revenue, ROE, operating cash flow) and a **Strategy** tab
+three KPIs — revenue, ROE, operating cash flow), a **Strategy** tab
 (freeform Markdown balanced-scorecard authoring across the four classical
-perspectives). Instructors get a cohort planning-quality dashboard and a
-read-only per-team strategy-map viewer.
+perspectives), a **Peer review** tab (rate each teammate on four Likert
+dimensions plus an optional comment, once per cohort, editable until
+close), and a **Board export** tab (download the team's capstone
+deliverable as Markdown). Instructors get a cohort planning-quality
+dashboard, a read-only per-team strategy-map viewer, a peer-reviews view
+with per-team aggregates plus the full rater→ratee detail, and a
+per-team board-export downloader. Ratees see only aggregated averages of
+themselves, and only once the cohort closes.
 
 ## Instructor console — `instructor_console.py`
 
@@ -65,7 +78,8 @@ app/
 ├── db.py                   SQLite schema + CRUD
 ├── auth.py                 accounts: hashing, register, login
 ├── service.py              database-to-engine bridge (GameService)
-├── pedagogy.py             planning-quality scoring + StrategyMap model (pure)
+├── pedagogy.py             scoring + strategy + peer-rating models (pure)
+├── board_export.py         Markdown board-meeting renderer (pure)
 ├── instructor_console.py   single-operator console (entry point)
 ├── forms.py                decision-entry form builders (shared)
 ├── views.py                report-rendering helpers (shared)
@@ -86,14 +100,17 @@ PYTHONPATH=sim-engine/src:app python3 -m pytest app/
 ```
 
 `test_app.py` (4 tests) drives the console headlessly with Streamlit's
-`AppTest`. `test_phase3.py` (33 tests) covers the database, accounts, the
-game service, and the pedagogy scoring directly, plus `AppTest` smoke
-tests of `app.py` — including an end-to-end student submission, an
-instructor period run, and a student saving a strategy map.
+`AppTest`. `test_phase3.py` (58 tests) covers the database, accounts and
+sessions, the game service, the pedagogy scoring and peer-assessment
+models, and the board-export Markdown renderer directly, plus `AppTest`
+smoke tests of `app.py` — including end-to-end flows for submitting a
+decision, running a period, saving a strategy map, saving a peer rating,
+the board-export tab, and the instructor "Team drafts" view.
 
 ## Known limitations (multi-user app)
 
-A logged-in session lives in Streamlit `session_state`, so a hard browser
-refresh requires logging in again. There are no real-time updates (refresh
-to see others' progress), and two members of one team editing the same
-draft is last-write-wins. See `../docs/current-task.md`.
+Two members of one team editing the same draft is last-write-wins;
+real-time push is limited to the instructor's submission dashboard
+(everywhere else, a normal Streamlit interaction triggers a rerun). The
+role chosen at registration is ungated — anyone can register as an
+instructor on a self-hosted install. See `../docs/current-task.md`.

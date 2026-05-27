@@ -100,6 +100,34 @@ CREATE TABLE IF NOT EXISTS strategy_maps (
     updated_at       TEXT NOT NULL,
     PRIMARY KEY (cohort_id, team_id)
 );
+
+-- Pedagogy layer: one peer-assessment row per (cohort, rater, ratee).
+-- CHECK constraints catch out-of-range scores at the schema boundary;
+-- the service layer enforces rater != ratee, same-team membership, and
+-- cohort-active gating. See docs/spec/09-pedagogy.md §3.
+CREATE TABLE IF NOT EXISTS peer_ratings (
+    cohort_id     INTEGER NOT NULL REFERENCES cohorts(id),
+    rater_id      INTEGER NOT NULL REFERENCES users(id),
+    ratee_id      INTEGER NOT NULL REFERENCES users(id),
+    contribution  INTEGER NOT NULL CHECK (contribution  BETWEEN 1 AND 5),
+    collaboration INTEGER NOT NULL CHECK (collaboration BETWEEN 1 AND 5),
+    reliability   INTEGER NOT NULL CHECK (reliability   BETWEEN 1 AND 5),
+    communication INTEGER NOT NULL CHECK (communication BETWEEN 1 AND 5),
+    comments      TEXT NOT NULL DEFAULT '',
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (cohort_id, rater_id, ratee_id)
+);
+
+-- Phase 3 polish: server-side session tokens backing cookie-based login,
+-- so a browser refresh no longer logs the user out. The token is opaque
+-- random bytes; lookup happens on every script run when a cookie is
+-- present. Expired rows are pruned on each lookup.
+CREATE TABLE IF NOT EXISTS sessions (
+    token      TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
 """
 
 
@@ -491,3 +519,128 @@ class Database:
                 (cohort_id,),
             ).fetchall()
             return list(rows)
+
+    # -- peer ratings --------------------------------------------------------
+
+    def get_peer_rating(
+        self, cohort_id: int, rater_id: int, ratee_id: int
+    ) -> Optional[sqlite3.Row]:
+        with self._tx() as conn:
+            return conn.execute(
+                "SELECT * FROM peer_ratings WHERE cohort_id = ? "
+                "AND rater_id = ? AND ratee_id = ?",
+                (cohort_id, rater_id, ratee_id),
+            ).fetchone()
+
+    def upsert_peer_rating(
+        self,
+        cohort_id: int,
+        rater_id: int,
+        ratee_id: int,
+        contribution: int,
+        collaboration: int,
+        reliability: int,
+        communication: int,
+        comments: str,
+    ) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "INSERT INTO peer_ratings (cohort_id, rater_id, ratee_id, "
+                "contribution, collaboration, reliability, communication, "
+                "comments, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(cohort_id, rater_id, ratee_id) DO UPDATE SET "
+                "contribution = excluded.contribution, "
+                "collaboration = excluded.collaboration, "
+                "reliability = excluded.reliability, "
+                "communication = excluded.communication, "
+                "comments = excluded.comments, "
+                "updated_at = excluded.updated_at",
+                (
+                    cohort_id,
+                    rater_id,
+                    ratee_id,
+                    contribution,
+                    collaboration,
+                    reliability,
+                    communication,
+                    comments,
+                    _now(),
+                ),
+            )
+
+    def delete_peer_rating(
+        self, cohort_id: int, rater_id: int, ratee_id: int
+    ) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "DELETE FROM peer_ratings WHERE cohort_id = ? "
+                "AND rater_id = ? AND ratee_id = ?",
+                (cohort_id, rater_id, ratee_id),
+            )
+
+    def list_peer_ratings_by_rater(
+        self, cohort_id: int, rater_id: int
+    ) -> List[sqlite3.Row]:
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM peer_ratings WHERE cohort_id = ? "
+                "AND rater_id = ? ORDER BY ratee_id",
+                (cohort_id, rater_id),
+            ).fetchall()
+            return list(rows)
+
+    def list_peer_ratings_by_ratee(
+        self, cohort_id: int, ratee_id: int
+    ) -> List[sqlite3.Row]:
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM peer_ratings WHERE cohort_id = ? "
+                "AND ratee_id = ? ORDER BY rater_id",
+                (cohort_id, ratee_id),
+            ).fetchall()
+            return list(rows)
+
+    def list_peer_ratings(self, cohort_id: int) -> List[sqlite3.Row]:
+        """Every rating in the cohort — for the instructor's matrix view."""
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM peer_ratings WHERE cohort_id = ? "
+                "ORDER BY rater_id, ratee_id",
+                (cohort_id,),
+            ).fetchall()
+            return list(rows)
+
+    # -- sessions ------------------------------------------------------------
+
+    def create_session(
+        self, token: str, user_id: int, expires_at: str
+    ) -> None:
+        """Persist a new session token; `expires_at` is an ISO-8601 string."""
+        with self._tx() as conn:
+            conn.execute(
+                "INSERT INTO sessions (token, user_id, created_at, "
+                "expires_at) VALUES (?, ?, ?, ?)",
+                (token, user_id, _now(), expires_at),
+            )
+
+    def lookup_session(self, token: str) -> Optional[sqlite3.Row]:
+        """Return the session row if it exists and has not expired."""
+        with self._tx() as conn:
+            return conn.execute(
+                "SELECT * FROM sessions WHERE token = ? "
+                "AND expires_at > ?",
+                (token, _now()),
+            ).fetchone()
+
+    def delete_session(self, token: str) -> None:
+        with self._tx() as conn:
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+
+    def purge_expired_sessions(self) -> int:
+        """Delete all expired sessions; return the row count removed."""
+        with self._tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM sessions WHERE expires_at <= ?", (_now(),)
+            )
+            return cur.rowcount

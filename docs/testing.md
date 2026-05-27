@@ -7,11 +7,11 @@ cover.
 
 | Suite | File | Count | Harness |
 | --- | --- | --- | --- |
-| Engine | `sim-engine/tests/test_run_period.py` | 28 | `pytest` |
+| Engine | `sim-engine/tests/test_run_period.py` | 35 | `pytest` |
 | Console app | `app/test_app.py` | 4 | `pytest` + Streamlit `AppTest` |
-| Multi-user app + pedagogy | `app/test_phase3.py` | 33 | `pytest` + Streamlit `AppTest` |
+| Multi-user app + pedagogy | `app/test_phase3.py` | 58 | `pytest` + Streamlit `AppTest` |
 
-As of 2026-05-22 all 65 pass.
+As of 2026-05-25 all 97 pass.
 
 ## Running the tests
 
@@ -115,6 +115,56 @@ Bundled into `app/test_phase3.py`:
   trial-period correctly flagged, headline `None` when only trial
   periods have run); planning quality before any period yields an empty
   result.
+- **Peer assessment (pure)** — `PeerRating` validation rejects scores
+  outside 1–5; `aggregate_ratings` returns all-`None` means for an empty
+  input, filters to one ratee, and computes per-dimension means
+  correctly.
+- **Peer assessment (db)** — `peer_ratings` CRUD: upsert creates and
+  overwrites; `delete_peer_rating` removes; the schema CHECK constraints
+  reject out-of-range scores at the database boundary.
+- **Peer assessment (service)** — `team_peer_targets` excludes self and
+  other-team members; `save_peer_rating` rejects self-rating, cross-team
+  pairs, out-of-range scores, and any save after the cohort is
+  `finished`; `my_aggregated_rating` returns `None` until the cohort
+  closes; the instructor's `team_peer_aggregates` returns the right
+  per-ratee summary.
+- **Peer assessment (AppTest)** — a student logs in, sets the four
+  Likert inputs and a comment for a teammate, clicks save, and the
+  rating persists; the aggregated view is hidden while the cohort is
+  active and appears after the cohort closes.
+- **Board export (pure renderer)** — the cover carries team and cohort
+  identity; an empty data bundle yields placeholder strings for each
+  section; the role filter keeps peer comments in the instructor
+  document and out of the student document; `_md_table` escapes pipes
+  and collapses newlines inside cells.
+- **Board export (service)** — student view on an active cohort hides
+  peer aggregates and comments but renders the period reports and
+  strategy map; student view on a finished cohort shows the user's own
+  aggregate while still hiding comments; instructor view always shows
+  per-member aggregates, detailed rater→ratee rows, and comments.
+- **Board export (AppTest)** — the Board export tab renders, and the
+  rendered document's H1 (`Board-meeting document — Apex`) appears in
+  the preview.
+- **Cookie sessions (db + auth)** — `sessions` table CRUD round-trips;
+  expired sessions don't resolve and are pruned by `purge_expired`;
+  `auth.create_session` mints a 32+ char token that `lookup_session`
+  resolves to the user, and `end_session` invalidates it.
+- **Instructor draft view (AppTest)** — the Run-period tab shows a
+  "Team drafts (read-only)" section, and each team's expander label
+  reflects its current draft / submitted state.
+
+### Untested by design
+
+- **Cookie browser persistence end-to-end.** The cookie value crosses a
+  JS bridge inside `extra_streamlit_components.CookieManager`; AppTest
+  is server-side script execution, not a browser, so it cannot drive
+  the cookie round trip. The DB and auth layers under the cookie are
+  unit-tested; the UI integration is verified only by the app loading
+  without exception and login still working in the headless harness.
+- **Auto-refresh timing.** `@st.fragment(run_every=5)` polls the DB on
+  a wall-clock timer; AppTest does not advance wall-clock time. The
+  fragment's *content* (status table, override, Run button) is still
+  exercised by the existing instructor-runs-period test.
 
 The AppTest tests point the app at a throwaway database via the
 `SOLAR_SIM_DB` environment variable. As with the console suite, a logout →

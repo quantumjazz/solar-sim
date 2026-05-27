@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 # Make the engine importable without installing it (dev convenience).
@@ -27,6 +28,7 @@ _ENGINE_SRC = Path(__file__).resolve().parent.parent / "sim-engine" / "src"
 if str(_ENGINE_SRC) not in sys.path:
     sys.path.insert(0, str(_ENGINE_SRC))
 
+import extra_streamlit_components as stx  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from sim_engine.validation import InvalidDecisionError  # noqa: E402
@@ -79,6 +81,68 @@ def _set_user(row) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cookie-backed session persistence
+# ---------------------------------------------------------------------------
+#
+# A logged-in user gets a server-side session row (via `auth.create_session`)
+# whose token rides in an HTTPS cookie called `auth.SESSION_COOKIE`. On every
+# script run we read the cookie; if the token resolves to a live session, we
+# populate `st.session_state.user` and skip the login screen.
+#
+# Timing note: the cookie value arrives via a JS bridge inside
+# `extra_streamlit_components.CookieManager`. On the very first script run
+# after a hard refresh, `get_all()` may return `{}` until the bridge has
+# replied — Streamlit then triggers a follow-up rerun where the cookie is
+# visible. The result is a brief "login screen flash" on hard refresh; once
+# the cookie lands the user is auto-logged-in.
+
+
+_cookie_manager = stx.CookieManager(key="solar_sim_cookies")
+_cookies = _cookie_manager.get_all(key="cookies_get_all") or {}
+
+
+def _current_session_token() -> str:
+    """The session token currently in the browser cookie, or '' if none."""
+    return _cookies.get(auth.SESSION_COOKIE, "") if _cookies else ""
+
+
+def _restore_session_from_cookie() -> None:
+    """Populate `session_state.user` from a valid cookie, if present."""
+    if st.session_state.user is not None:
+        return
+    token = _current_session_token()
+    if not token:
+        return
+    user = auth.lookup_session(_get_db(), token)
+    if user is None:
+        # Stale token — clear the cookie so we don't keep retrying.
+        _cookie_manager.delete(auth.SESSION_COOKIE, key="cookies_del_stale")
+        return
+    _set_user(user)
+
+
+def _login_with_cookie(user_row) -> None:
+    """Set the in-session user, mint a server session and cookie."""
+    _set_user(user_row)
+    token = auth.create_session(_get_db(), int(user_row["id"]))
+    _cookie_manager.set(
+        auth.SESSION_COOKIE,
+        token,
+        key="cookies_set_login",
+        expires_at=datetime.now(timezone.utc) + auth.SESSION_DURATION,
+    )
+
+
+def _logout_and_clear_cookie() -> None:
+    """End the server session, drop the cookie, and clear session_state."""
+    token = _current_session_token()
+    if token:
+        auth.end_session(_get_db(), token)
+    _cookie_manager.delete(auth.SESSION_COOKIE, key="cookies_del_logout")
+    st.session_state.user = None
+
+
+# ---------------------------------------------------------------------------
 # Login / registration
 # ---------------------------------------------------------------------------
 
@@ -97,7 +161,7 @@ def _render_auth() -> None:
             if user is None:
                 st.error("Incorrect email or password.")
             else:
-                _set_user(user)
+                _login_with_cookie(user)
                 st.rerun()
 
     with tab_register:
@@ -114,7 +178,7 @@ def _render_auth() -> None:
             except auth.AuthError as exc:
                 st.error(str(exc))
             else:
-                _set_user(_get_db().get_user(uid))
+                _login_with_cookie(_get_db().get_user(uid))
                 st.rerun()
 
 
@@ -124,7 +188,7 @@ def _render_sidebar(user: dict) -> None:
         st.write(f"**{user['display_name']}**")
         st.caption(f"{user['email']} · {user['role']}")
         if st.button("Log out"):
-            st.session_state.user = None
+            _logout_and_clear_cookie()
             st.rerun()
 
 
@@ -240,6 +304,8 @@ def _render_cohort_detail(cohort) -> None:
             "Reports",
             "Planning quality",
             "Strategy maps",
+            "Peer reviews",
+            "Board export",
         ]
     )
     with tabs[0]:
@@ -252,11 +318,14 @@ def _render_cohort_detail(cohort) -> None:
         _render_planning_quality(cohort, role="instructor")
     with tabs[4]:
         _render_strategy(cohort, role="instructor")
+    with tabs[5]:
+        _render_peer_review(cohort, role="instructor")
+    with tabs[6]:
+        _render_board_export(cohort, role="instructor")
 
 
 def _render_run_panel(cohort) -> None:
     svc = _svc()
-    db = _get_db()
     cohort_id = cohort["id"]
 
     if cohort["status"] == "finished":
@@ -266,6 +335,108 @@ def _render_run_panel(cohort) -> None:
     upcoming = svc.upcoming_period(cohort_id)
     fc = form_context(svc.load_pack(cohort_id), upcoming)
     _render_period_header(cohort, fc, expand_briefing=False)
+
+    # Auto-refreshing dashboard + run controls (see fragment below).
+    _render_run_dashboard(cohort_id, upcoming)
+
+    # Read-only view of each team's draft, below the dashboard.
+    _render_team_drafts(cohort_id, upcoming)
+
+
+def _render_team_drafts(cohort_id: int, upcoming: int) -> None:
+    svc = _svc()
+    db = _get_db()
+    st.markdown("#### Team drafts (read-only)")
+    st.caption(
+        "What each team has entered for the upcoming period so far. The "
+        "dashboard above auto-refreshes; this section updates when the page "
+        "reruns."
+    )
+    for team in db.list_teams(cohort_id):
+        status = svc.decision_status(cohort_id, team["id"], upcoming)
+        suffix = {
+            "submitted": "  ·  ✓ submitted",
+            "draft": "  ·  draft",
+            "none": "  ·  no decision yet",
+        }[status]
+        with st.expander(f"{team['name']}{suffix}"):
+            decision = svc.get_decision(cohort_id, team["id"], upcoming)
+            if decision is None:
+                st.caption("No decision entered yet.")
+                continue
+            _render_draft_summary(decision)
+
+
+def _render_draft_summary(decision) -> None:
+    """Compact read-only summary of one team's decision — for instructors."""
+    rnd_by_p = {r.product: r for r in decision.rnd.by_product}
+    prod_by_p = {p.product: p for p in decision.production.by_product}
+    rows = []
+    for sd in decision.sales.by_product:
+        rnd = rnd_by_p.get(sd.product)
+        prod = prod_by_p.get(sd.product)
+        m1 = sd.market_1
+        rows.append(
+            {
+                "Product": sd.product,
+                "Price M1": f"€{m1.price:,.0f}" if m1 else "—",
+                "Target volume": f"{prod.target_volume:,}" if prod else "—",
+                "R&D heads": rnd.researchers if rnd else 0,
+                "Advertising M1": f"€{m1.advertising:,.0f}" if m1 else "—",
+            }
+        )
+    if rows:
+        st.dataframe(rows, hide_index=True, width="stretch")
+
+    col_hr, col_fin = st.columns(2)
+    pk = decision.finance.planned_kpis
+    with col_hr:
+        st.caption("HR & finance")
+        st.dataframe(
+            [
+                {"Item": "Workforce Δ", "Value": decision.hr.production_workforce_change},
+                {"Item": "Training / employee",
+                 "Value": f"€{decision.hr.training_per_employee:,.0f}"},
+                {"Item": "Process-opt spend",
+                 "Value": f"€{decision.hr.process_optimisation_spend:,.0f}"},
+                {"Item": "Short-term loan",
+                 "Value": f"€{decision.finance.short_term_loan:,.0f}"},
+                {"Item": "Dividend",
+                 "Value": f"€{decision.finance.dividend:,.0f}"},
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+    with col_fin:
+        st.caption("Planned KPIs")
+        st.dataframe(
+            [
+                {"Item": "Revenue", "Value": f"€{pk.revenue:,.0f}"},
+                {"Item": "Return on equity",
+                 "Value": f"{pk.return_on_equity:.1%}"},
+                {"Item": "Operating cash flow",
+                 "Value": f"€{pk.operating_cash_flow:,.0f}"},
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+
+    with st.expander("Raw decision (JSON)"):
+        st.json(decision.model_dump(exclude={"team_id", "period"}))
+
+
+@st.fragment(run_every=5)
+def _render_run_dashboard(cohort_id: int, upcoming: int) -> None:
+    """Submission status + run controls, polled every 5 seconds.
+
+    Wrapping these widgets in a fragment means the instructor sees
+    submissions arrive without manually refreshing the page — and the
+    Run-period button is enabled/disabled in step with the live status.
+    Clicking Run triggers a full-app rerun via `st.rerun()` so the rest of
+    the UI (period counter, reports) updates too.
+    """
+    svc = _svc()
+    db = _get_db()
 
     status = svc.submission_status(cohort_id, upcoming)
     teams = db.list_teams(cohort_id)
@@ -291,7 +462,7 @@ def _render_run_panel(cohort) -> None:
         key=f"override_{cohort_id}",
     )
     if not all_submitted and not override:
-        st.caption("Not every team has submitted yet.")
+        st.caption("Not every team has submitted yet — this view refreshes every 5s.")
 
     if st.button(
         f"Run period {upcoming}",
@@ -587,6 +758,244 @@ def _render_strategy(
 
 
 # ---------------------------------------------------------------------------
+# Pedagogy: peer assessment
+# ---------------------------------------------------------------------------
+
+
+def _fmt_mean(value) -> str:
+    return f"{value:.1f}" if value is not None else "—"
+
+
+def _render_peer_review(
+    cohort, role: str, team_id: int = None, user_id: int = None
+) -> None:
+    svc = _svc()
+    db = _get_db()
+    cohort_id = cohort["id"]
+    finished = cohort["status"] == "finished"
+
+    if role == "student":
+        if finished:
+            agg = svc.my_aggregated_rating(cohort_id, user_id)
+            if agg is None or agg.n_raters == 0:
+                st.info("No peer ratings were recorded for you in this cohort.")
+                return
+            st.markdown(
+                f"### Your peer ratings  ·  {agg.n_raters} rater(s)"
+            )
+            cols = st.columns(5)
+            cols[0].metric("Contribution", _fmt_mean(agg.contribution_mean))
+            cols[1].metric("Collaboration", _fmt_mean(agg.collaboration_mean))
+            cols[2].metric("Reliability", _fmt_mean(agg.reliability_mean))
+            cols[3].metric("Communication", _fmt_mean(agg.communication_mean))
+            cols[4].metric(
+                "Overall",
+                f"{agg.overall_mean:.2f}" if agg.overall_mean is not None else "—",
+            )
+            st.caption(
+                "Means per dimension across your raters, on a 1–5 scale. "
+                "Comments are visible to the instructor only."
+            )
+            return
+
+        targets = svc.team_peer_targets(cohort_id, user_id)
+        if not targets:
+            st.info(
+                "You have no teammates to rate yet — check back once your "
+                "instructor has added more students to your team."
+            )
+            return
+        st.markdown(
+            "Rate each teammate from **1** (lowest) to **5** (highest) on "
+            "the four dimensions, plus an optional comment. You can edit "
+            "any time the cohort is active; ratings are locked when the "
+            "cohort closes. Only the instructor sees your individual "
+            "ratings while the cohort runs."
+        )
+        for member in targets:
+            existing = svc.get_my_rating(cohort_id, user_id, member["id"])
+            tag = "  ·  rated" if existing is not None else ""
+            with st.expander(f"{member['display_name']}{tag}"):
+                c1, c2, c3, c4 = st.columns(4)
+                contribution = c1.number_input(
+                    "Contribution",
+                    min_value=1, max_value=5, step=1,
+                    value=int(existing.contribution) if existing else 3,
+                    key=f"pr_contrib_{cohort_id}_{member['id']}",
+                )
+                collaboration = c2.number_input(
+                    "Collaboration",
+                    min_value=1, max_value=5, step=1,
+                    value=int(existing.collaboration) if existing else 3,
+                    key=f"pr_collab_{cohort_id}_{member['id']}",
+                )
+                reliability = c3.number_input(
+                    "Reliability",
+                    min_value=1, max_value=5, step=1,
+                    value=int(existing.reliability) if existing else 3,
+                    key=f"pr_reli_{cohort_id}_{member['id']}",
+                )
+                communication = c4.number_input(
+                    "Communication",
+                    min_value=1, max_value=5, step=1,
+                    value=int(existing.communication) if existing else 3,
+                    key=f"pr_comm_{cohort_id}_{member['id']}",
+                )
+                comments = st.text_area(
+                    "Comments (optional, instructor only)",
+                    value=existing.comments if existing else "",
+                    key=f"pr_text_{cohort_id}_{member['id']}",
+                    height=100,
+                )
+                if st.button(
+                    f"Save rating for {member['display_name']}",
+                    key=f"pr_save_{cohort_id}_{member['id']}",
+                ):
+                    try:
+                        svc.save_peer_rating(
+                            cohort_id,
+                            user_id,
+                            member["id"],
+                            int(contribution),
+                            int(collaboration),
+                            int(reliability),
+                            int(communication),
+                            comments,
+                        )
+                    except ServiceError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success("Rating saved.")
+                        st.rerun()
+        return
+
+    # Instructor view: per-team aggregates plus detailed rater→ratee matrix.
+    teams = db.list_teams(cohort_id)
+    name_by_id = {u["id"]: u["display_name"] for u in db.list_users()}
+    if not finished:
+        st.caption(
+            "Cohort is still active — ratings will continue to come in "
+            "until it closes."
+        )
+    for team in teams:
+        members = db.list_team_members(team["id"])
+        st.markdown(f"#### {team['name']}")
+        if not members:
+            st.caption("No members on this team.")
+            continue
+        aggs = svc.team_peer_aggregates(cohort_id, team["id"])
+        st.dataframe(
+            [
+                {
+                    "Ratee": name_by_id.get(a.ratee_id, str(a.ratee_id)),
+                    "n raters": a.n_raters,
+                    "Contribution": _fmt_mean(a.contribution_mean),
+                    "Collaboration": _fmt_mean(a.collaboration_mean),
+                    "Reliability": _fmt_mean(a.reliability_mean),
+                    "Communication": _fmt_mean(a.communication_mean),
+                    "Overall": (
+                        f"{a.overall_mean:.2f}"
+                        if a.overall_mean is not None
+                        else "—"
+                    ),
+                }
+                for a in aggs
+            ],
+            hide_index=True,
+            width="stretch",
+        )
+        with st.expander("Detailed ratings (rater → ratee)"):
+            ratings = svc.peer_ratings_for_team(cohort_id, team["id"])
+            if not ratings:
+                st.caption("No ratings yet.")
+            else:
+                st.dataframe(
+                    [
+                        {
+                            "Rater": name_by_id.get(r.rater_id, str(r.rater_id)),
+                            "Ratee": name_by_id.get(r.ratee_id, str(r.ratee_id)),
+                            "Contrib": r.contribution,
+                            "Collab": r.collaboration,
+                            "Reli": r.reliability,
+                            "Comm": r.communication,
+                            "Overall": f"{r.overall:.2f}",
+                            "Comments": r.comments,
+                        }
+                        for r in ratings
+                    ],
+                    hide_index=True,
+                    width="stretch",
+                )
+
+
+# ---------------------------------------------------------------------------
+# Pedagogy: board-meeting export
+# ---------------------------------------------------------------------------
+
+
+def _safe_filename_piece(text: str) -> str:
+    """Make a string safe for a filename — keep alnums, '-' and '_'."""
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in text)
+
+
+def _render_board_export(
+    cohort, role: str, team_id: int = None, user_id: int = None
+) -> None:
+    svc = _svc()
+    db = _get_db()
+    cohort_id = cohort["id"]
+
+    st.markdown(
+        "The capstone deliverable — every team's reports, planning quality, "
+        "strategy map and peer-assessment summary in one portable Markdown "
+        "document. Download the file or use `pandoc` to convert to PDF or "
+        "DOCX downstream."
+    )
+
+    if role == "instructor":
+        teams = db.list_teams(cohort_id)
+        if not teams:
+            st.caption("No teams in this cohort yet.")
+            return
+        target_id = st.selectbox(
+            "Team",
+            [t["id"] for t in teams],
+            format_func=lambda i: next(t["name"] for t in teams if t["id"] == i),
+            key=f"be_team_{cohort_id}",
+        )
+        target = db.get_team(target_id)
+    else:
+        target = db.get_team(team_id)
+
+    try:
+        document = svc.build_board_document(
+            cohort_id,
+            target["id"],
+            viewer_role=role,
+            viewer_user_id=user_id if role == "student" else None,
+        )
+    except ServiceError as exc:
+        st.error(str(exc))
+        return
+
+    filename = (
+        f"board-meeting-{_safe_filename_piece(cohort['name'])}-"
+        f"{_safe_filename_piece(target['name'])}-{date.today().isoformat()}.md"
+    )
+    st.download_button(
+        "Download as Markdown",
+        data=document,
+        file_name=filename,
+        mime="text/markdown",
+        type="primary",
+        key=f"be_download_{cohort_id}_{target['id']}",
+    )
+
+    with st.expander("Preview document", expanded=False):
+        st.markdown(document)
+
+
+# ---------------------------------------------------------------------------
 # Student
 # ---------------------------------------------------------------------------
 
@@ -613,7 +1022,16 @@ def _render_student(user: dict) -> None:
     team = db.get_user_team(cohort_id, user["id"])
 
     st.subheader(f"{cohort['name']} — {team['name']}")
-    tabs = st.tabs(["Decision", "Reports", "Planning quality", "Strategy"])
+    tabs = st.tabs(
+        [
+            "Decision",
+            "Reports",
+            "Planning quality",
+            "Strategy",
+            "Peer review",
+            "Board export",
+        ]
+    )
     with tabs[0]:
         _render_student_decision(user, cohort, team)
     with tabs[1]:
@@ -622,6 +1040,14 @@ def _render_student(user: dict) -> None:
         _render_planning_quality(cohort, role="student", team_id=team["id"])
     with tabs[3]:
         _render_strategy(
+            cohort, role="student", team_id=team["id"], user_id=user["id"]
+        )
+    with tabs[4]:
+        _render_peer_review(
+            cohort, role="student", team_id=team["id"], user_id=user["id"]
+        )
+    with tabs[5]:
+        _render_board_export(
             cohort, role="student", team_id=team["id"], user_id=user["id"]
         )
 
@@ -692,6 +1118,11 @@ def _render_student_decision(user: dict, cohort, team) -> None:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+# Try to auto-login from a cookie (sets st.session_state.user if a valid
+# session token is in the browser); on the very first run after a refresh
+# the cookies may not have arrived yet — the next rerun catches them.
+_restore_session_from_cookie()
 
 _user = st.session_state.user
 if _user is None:

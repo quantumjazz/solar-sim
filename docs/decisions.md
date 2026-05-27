@@ -178,11 +178,11 @@ were all deferred.
 ### 21. Pedagogy layer ships in two passes; pass 1 = student-authored artifacts
 
 The pedagogy layer is too big to land in one phase, so it ships in two
-passes. **Pass 1** (this commit) is the student-authored artifacts:
-**planning quality** (per-period plan-vs-actual scoring on the three KPIs
-already carried in `TeamDecision.finance.planned_kpis`) and a freeform
-**balanced-scorecard strategy map** per team. **Pass 2** (a later phase)
-is peer assessment and a board-meeting export.
+passes. **Pass 1** is the student-authored artifacts: **planning quality**
+(per-period plan-vs-actual scoring on the three KPIs already carried in
+`TeamDecision.finance.planned_kpis`) and a freeform **balanced-scorecard
+strategy map** per team. **Pass 2** is peer assessment and a
+board-meeting export.
 
 Planning quality is scored with **symmetric MAPE** per KPI, taking the
 mean across the three KPIs and averaging real periods (trial periods are
@@ -197,4 +197,104 @@ The strategy map is **freeform Markdown per balanced-scorecard
 perspective**, not algorithmically graded — the instructor reviews each
 team's map against the course rubric. The MVP keeps only the current
 version (no edit history). The engine was not touched in either case.
+**Status: adopted.**
+
+### 22. Peer assessment: once per cohort, ratee-anonymised, multi-dimensional
+
+The first half of pedagogy pass 2 — peer assessment — uses three choices
+decided with the user. **Cadence**: one rating per (rater, ratee) per
+cohort, editable any time the cohort is active and locked when it
+finishes. **Visibility to the ratee**: aggregated per-dimension averages
+only, shown only after the cohort closes — the standard anonymity-to-ratee
+pattern (`docs/sources.md` §8: Topping 2009). Comments stay
+instructor-only in this first pass. **Dimensions**: four Likert 1–5
+scales (contribution, collaboration, reliability, communication) plus an
+optional free-text comment, following Fellenz (2006)'s evaluation-of-
+individual-contributions protocol. Self-rating is excluded.
+
+The service layer enforces three rules the schema cannot — rater ≠ ratee,
+same-team membership, cohort-active gating — alongside the database
+CHECK constraints on the 1–5 dimension range. The spec is in
+`docs/spec/09-pedagogy.md` §3. Board-meeting export remains for a
+follow-up phase.
+**Status: adopted.**
+
+### 23. Board-meeting export is Markdown, zero new dependencies
+
+The second half of pedagogy pass 2 — the capstone deliverable — is a
+**Markdown** document, not PDF or DOCX. Markdown carries the project's
+no-third-party-dependency stance: generation is a pure string-build
+(`app/board_export.py`), it renders natively as a Streamlit preview, it
+downloads as a plain `.md`, and downstream conversion to PDF / DOCX is
+one `pandoc` call away. A native PDF or DOCX exporter would mean adding
+a library; that's deferred.
+
+The same renderer drives both viewer roles. Students get their own team's
+document with the peer-assessment section filtered to their own
+aggregated rating (gated by the cohort-status rule from decision #22);
+instructors get the full per-team aggregate and rater→ratee detail with
+comments. The spec is in `docs/spec/09-pedagogy.md` §4. After this lands,
+all four pedagogy features named in the README are in place.
+**Status: adopted.**
+
+### 24. Phase 3 polish: real cookies over a URL-token workaround
+
+The Phase 3 multi-user app originally kept the logged-in user in
+Streamlit `session_state`, which a hard browser refresh clears — the
+single most-felt friction point. Phase 3 polish fixes it with **real
+cookies**, not a URL-query-parameter token. The cookie carries an opaque
+random token (`secrets.token_urlsafe(32)`) backed by a server-side
+`sessions` table (token PK, user_id, expiry); login mints, logout
+deletes, expired rows are pruned on every lookup.
+
+The price is one new third-party runtime dependency,
+`extra-streamlit-components`, for its `CookieManager`. The trade-off was
+decided with the user: a query-parameter token alternative would have
+been stdlib-only but put the session token in the URL (visible in
+history, leaked by copy-paste). Real cookies were judged worth the
+modest dep cost; the library is small, well-maintained, and widely used.
+
+Alongside the cookie fix, **`@st.fragment(run_every=5)`** wraps the
+instructor's submission dashboard so submissions land without a manual
+refresh, and a read-only **Team drafts** section shows each team's
+in-progress decision for live monitoring. No engine changes.
+**Status: adopted.**
+
+### 25. Engine gaps closed (insolvency, tender lag, overtime, rating, share price)
+
+A combined pass closes every gap listed in `docs/current-task.md`'s
+"Known limitations / engine" section:
+
+- **Insolvency.** Negative book equity at period end sets a sticky
+  `is_bankrupt` flag (`docs/spec/05-finance.md` §11). The flag is a
+  pedagogical signal — the company keeps playing — and is surfaced in
+  `ExecutiveSummary` and `IndustryCompanyLine`. Articulation holds for
+  solvent and bankrupt companies alike.
+- **Tender delivery lag.** Won tenders are stored as
+  `CompanyState.committed_tenders` and ship in their
+  `tender.delivery_period` (`01-sales.md` §3.1). Revenue books at
+  delivery; inventory is reserved at delivery time, not at bid time.
+- **Overtime (Capacity III).** When aggregate production target exceeds
+  Available Capacity II, the engine schedules overtime up to
+  `overtime_max_pct` (`03-production.md` §2.3). The step fixed cost
+  (500 k EUR) and a 25 % wage premium on overtime hours flow into
+  `other_expenses`.
+- **Dynamic rating + interest surcharge.** `rating_index` is now
+  recomputed every period from seven of the eleven components in
+  `05-finance.md` §4.1 — the ones available without time-series
+  history. The rating drives a per-period interest-rate surcharge
+  (§4.2); the loan rates already paid this period use the prior
+  period's rating, which matches §1.2's floating-rate intent.
+- **Share price.** `executive_summary.share_price` is now non-zero and
+  responds to four core drivers (ROE, ROS, book equity level, debt /
+  equity). Four-driver MVP instead of the spec's 14; pilot calibration
+  will refine the β coefficients.
+
+Both rating (7 of 11 components) and share price (4 of 14 drivers) ship
+as documented MVP simplifications — added to `05-finance.md` §4.1 and §5
+as inline notes. Tests added: insolvency × 3, tender lag × 1 (existing
+test updated and extended), overtime × 1, rating × 2, share price × 1.
+Engine test count goes 28 → 35; the articulation invariant still holds
+in every test, for solvent and bankrupt companies, with and without
+overtime, and after the rating-surcharge re-prices interest.
 **Status: adopted.**

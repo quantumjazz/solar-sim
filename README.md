@@ -3,21 +3,25 @@
 A multi-team classroom **business simulation** for university management courses,
 set in the **solar PV and energy-storage** industry.
 
-> **Status:** Engine, both front ends, and the first slice of the pedagogy
-> layer working. Mechanics spec + scenario pack (Phase 0), multi-team Python
-> engine with full P&L / balance-sheet / cash-flow articulation, successor
-> products (Gen-2 panel, battery storage, balcony solar) with R&D
-> development and a coexistence handover, a single-operator Streamlit
-> instructor console, a multi-user app with per-student logins over a SQLite
-> database, and pedagogy artifacts: planning-quality scoring (sMAPE) and a
-> balanced-scorecard strategy-map authoring screen.
-> 65 tests pass (28 engine + 37 app).
+> **Status:** Engine, both front ends, the full pedagogy layer, and a
+> polished multi-user UX are working. Mechanics spec + scenario pack
+> (Phase 0), multi-team Python engine with full P&L / balance-sheet /
+> cash-flow articulation, successor products (Gen-2 panel, battery
+> storage, balcony solar) with R&D development and a coexistence handover,
+> a single-operator Streamlit instructor console, a multi-user app with
+> per-student logins (cookie-persistent across browser refreshes) over a
+> SQLite database, an auto-refreshing instructor submission dashboard, a
+> read-only view of each team's in-progress draft, and the four pedagogy
+> features: planning-quality scoring (sMAPE), balanced-scorecard
+> strategy-map authoring, per-teammate peer assessment, and a Markdown
+> board-meeting export.
+> 97 tests pass (35 engine + 62 app).
 > **Public name:** TBD. The directory name `solar-sim` is a placeholder.
 
 ## Quick start
 
 ```bash
-pip install streamlit pydantic pyyaml
+pip install streamlit pydantic pyyaml extra-streamlit-components
 streamlit run app/app.py                         # multi-user app (logins + SQLite)
 streamlit run app/instructor_console.py          # single-operator console
 cd sim-engine && PYTHONPATH=src python -m pytest # engine tests
@@ -85,7 +89,8 @@ solar-sim/
 └── app/                      ← Streamlit front ends
     ├── app.py                      multi-user app (logins, SQLite-backed)
     ├── db.py / auth.py / service.py  the database, accounts, engine bridge
-    ├── pedagogy.py                  planning-quality + strategy-map models
+    ├── pedagogy.py                  planning-quality + strategy + peer models
+    ├── board_export.py              Markdown board-meeting document renderer
     ├── forms.py / views.py          decision forms and report rendering
     └── instructor_console.py        single-operator console (no database)
 ```

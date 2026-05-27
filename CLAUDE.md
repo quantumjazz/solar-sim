@@ -29,10 +29,12 @@ streamlit run app/app.py                 # multi-user app (logins + SQLite)
 streamlit run app/instructor_console.py  # single-operator console (no DB)
 ```
 
-As of 2026-05-22: 28 engine tests + 37 app tests, all passing. Runtime
-dependencies: `pydantic` (v2), `pyyaml`, `streamlit`. The multi-user app
-also uses `sqlite3`, `hashlib`, and `secrets` — all from the standard
-library. Test dependency: `pytest`. There is no build step.
+As of 2026-05-25: 35 engine tests + 62 app tests, all passing. Runtime
+dependencies: `pydantic` (v2), `pyyaml`, `streamlit`, and
+`extra-streamlit-components` (cookies for the multi-user app's
+persistent login). The multi-user app also uses `sqlite3`, `hashlib`,
+and `secrets` — all from the standard library. Test dependency:
+`pytest`. There is no build step.
 
 ## Architecture map
 
@@ -52,7 +54,8 @@ app/                 Streamlit front ends (depend on the engine)
   db.py                SQLite schema + CRUD
   auth.py              account hashing, register / login
   service.py           bridges the database to the engine
-  pedagogy.py          planning-quality scoring + StrategyMap model (pure)
+  pedagogy.py          planning-quality + StrategyMap + peer-rating models (pure)
+  board_export.py      Markdown renderer for the board-meeting deliverable (pure)
   forms.py / views.py  decision-entry forms / report rendering (shared)
   instructor_console.py  single-operator console (no database)
 docs/                spec/ (incl. 09-pedagogy.md), sources.md, calibration.md,

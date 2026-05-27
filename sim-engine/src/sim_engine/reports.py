@@ -41,6 +41,7 @@ class ExecutiveSummary(BaseModel):
     return_on_sales: float
     cash_balance: float
     rating_index: float
+    is_bankrupt: bool = False
 
 
 class MarketLine(BaseModel):
@@ -183,6 +184,7 @@ class IndustryCompanyLine(BaseModel):
     units_sold: int
     market_share_pct: float
     share_price: float
+    is_bankrupt: bool = False
 
 
 class IndustryReport(BaseModel):

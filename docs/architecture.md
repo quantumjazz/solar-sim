@@ -135,6 +135,29 @@ submitted (or with an explicit override that uses current drafts).
 `run_period` validates all decisions again and either advances the cohort or
 rejects the period.
 
+### Cookie-persistent sessions
+
+A logged-in user gets a server-side row in a `sessions` table (token,
+user id, expiry) and the token rides in an HTTP cookie named
+`solar_sim_session`. On every script run `app.py` reads the cookie via
+`extra_streamlit_components.CookieManager`, looks the token up
+(`auth.lookup_session`, which also purges expired rows), and restores
+`session_state.user` — so a browser refresh no longer logs the user out.
+Login mints the token; logout deletes both the cookie and the database
+row. Sessions expire after 7 days by default. On the very first script
+run after a hard refresh the cookie may not have arrived from the JS
+bridge yet; the next rerun catches it.
+
+### Live submission dashboard
+
+The instructor's "Run period" tab wraps the submission-status table,
+override checkbox, and Run-period button in a `@st.fragment(run_every=5)`,
+so submissions appear within a few seconds without manual page
+interaction. Clicking Run triggers a full-app rerun so the rest of the
+UI (period counter, reports) reflects the new state. A read-only "Team
+drafts" section below shows each team's current in-progress decision —
+useful for live monitoring during a deadline window.
+
 ## Pedagogy layer
 
 A thin layer on top of the simulation, scoring and structuring student work.
@@ -155,9 +178,29 @@ the saved `ReportBundle`) the engine already produces.
 `strategy_maps` — stores four freeform-Markdown perspectives per
 (cohort, team).
 
-In the UI, students get **Planning quality** and **Strategy** tabs;
-instructors get a planning-quality dashboard and a read-only per-team
-strategy viewer.
+In the UI, students get **Planning quality**, **Strategy**, and **Peer
+review** tabs; instructors get a planning-quality dashboard, a read-only
+per-team strategy viewer, and a per-team peer-review view (aggregates
+plus the full rater→ratee detail).
+
+**Peer assessment** layers on top: a `peer_ratings` table (CHECK
+constraints catch out-of-range scores at the schema boundary; the service
+layer enforces rater ≠ ratee, same-team membership, and cohort-active
+gating). Students rate each teammate on four dimensions (1–5 Likert) plus
+an optional comment, once per cohort, editable until the cohort closes.
+The ratee sees aggregated per-dimension averages only after the cohort
+closes — the standard anonymity-to-ratee pattern (`sources.md` §8:
+Topping 2009; Fellenz 2006). Comments are visible to the instructor only.
+
+**Board-meeting export** is a Markdown document — `app/board_export.py`,
+also a pure module — that packages a team's cover, cohort standing,
+period-by-period reports, planning quality, strategy map and peer
+aggregates into a single portable deliverable. The same renderer drives
+two views: students export their own team's document with peer
+information gated by the visibility rules above; instructors export any
+team's document with full peer detail and comments. See `09-pedagogy.md`
+§4. The UI offers an `st.download_button` (`.md` file) plus a preview
+expander.
 
 ## Scenario pack layout
 

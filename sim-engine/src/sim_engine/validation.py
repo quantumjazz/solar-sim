@@ -56,6 +56,24 @@ def validate_decision(
         if value < 0:
             errors.append(f"{label} must be non-negative (got {value})")
 
+    # --- Unknown product references ---------------------------------------
+    # A typo'd product id would otherwise be silently skipped by the engine
+    # (no purchase, no production, no sales — and no error). Catch it here
+    # so the team sees the mistake before the period runs.
+    known_products = {p.id for p in ctx.products}
+    for area_label, items in (
+        ("sales", decision.sales.by_product),
+        ("R&D", decision.rnd.by_product),
+        ("purchasing", decision.purchasing.by_product),
+        ("production", decision.production.by_product),
+    ):
+        for item in items:
+            if item.product not in known_products:
+                errors.append(
+                    f"unknown product {item.product!r} in {area_label} decision "
+                    f"(known: {sorted(known_products)})"
+                )
+
     # --- Sales -------------------------------------------------------------
     for sd in decision.sales.by_product:
         for market_label, m in (

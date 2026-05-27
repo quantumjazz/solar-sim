@@ -229,6 +229,10 @@ class MarketCoefficients(BaseModel):
     beta_img: float = 0.5
     beta_sat: float = 0.5
     product_weights: Dict[str, float] = Field(default_factory=dict)
+    # Price-factor anchor (base currency per unit): the price a team is
+    # "scored against" in the attraction model. Should be set per market in
+    # the scenario; the default is a solar-v1 carryover.
+    price_anchor: float = 2_800.0
     ads_ref: float = 12_000_000
     sf_ref: float = 200
     ci_ref: float = 3_000_000

@@ -1,22 +1,23 @@
-"""Pedagogy-layer models: planning-quality scoring and the strategy map.
+"""Pedagogy-layer models.
 
-Two pieces in one module:
+Three pieces in one module, all pure (no database or UI dependency):
 
-  - **Planning quality** — pure functions and models scoring a team's
-    forecast against its actuals each period. The formula is symmetric
-    MAPE; see `docs/spec/09-pedagogy.md` §1 and `docs/sources.md` §8 for
-    the public-source citations.
+  - **Planning quality** — symmetric MAPE scoring of a team's forecast
+    against the actuals it realises each period (`09-pedagogy.md` §1).
   - **Strategy map** — a Pydantic model for a team's balanced-scorecard
-    statement (four freeform perspectives); see `09-pedagogy.md` §2.
+    statement (four freeform perspectives; `09-pedagogy.md` §2).
+  - **Peer assessment** — per-(rater, ratee) rating across four
+    dimensions on a 1–5 Likert scale, with aggregation
+    (`09-pedagogy.md` §3).
 
-This module has no database or UI dependency. The service layer reads
-the underlying decisions / reports / rows from SQLite and asks this
-module to score them, so the formula stays unit-testable on its own.
+The service layer reads decisions, reports, and database rows from
+SQLite and asks this module to score / aggregate them, so the formulas
+stay unit-testable on their own.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -179,3 +180,92 @@ class StrategyMap(BaseModel):
             or self.internal_process.strip()
             or self.learning_growth.strip()
         )
+
+
+# ---------------------------------------------------------------------------
+# Peer assessment
+# ---------------------------------------------------------------------------
+
+
+#: The four dimensions, in the order shown to students and the order used by
+#: the database columns. Keep these in sync with `peer_ratings` in `db.py`
+#: and with `09-pedagogy.md` §3.1.
+PEER_DIMENSIONS = (
+    "contribution",
+    "collaboration",
+    "reliability",
+    "communication",
+)
+
+
+class PeerRating(BaseModel):
+    """One rater's rating of one teammate in one cohort.
+
+    Dimension scores are bounded to the 1-5 Likert scale at the model
+    boundary; the database also enforces this with CHECK constraints.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    cohort_id: int
+    rater_id: int
+    ratee_id: int
+    contribution: int = Field(ge=1, le=5)
+    collaboration: int = Field(ge=1, le=5)
+    reliability: int = Field(ge=1, le=5)
+    communication: int = Field(ge=1, le=5)
+    comments: str = ""
+    updated_at: Optional[str] = None
+
+    @property
+    def overall(self) -> float:
+        """Unweighted mean of the four dimension scores, in [1, 5]."""
+        return (
+            self.contribution
+            + self.collaboration
+            + self.reliability
+            + self.communication
+        ) / 4.0
+
+
+class AggregatedRating(BaseModel):
+    """One ratee's aggregated peer-rating view across raters.
+
+    Means are `None` when nobody has rated the ratee yet — the UI shows
+    "—". The overall mean is the average of the four dimension means
+    (also `None` if no raters).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ratee_id: int
+    n_raters: int = 0
+    contribution_mean: Optional[float] = None
+    collaboration_mean: Optional[float] = None
+    reliability_mean: Optional[float] = None
+    communication_mean: Optional[float] = None
+    overall_mean: Optional[float] = None
+
+
+def aggregate_ratings(
+    ratee_id: int, ratings: Iterable[PeerRating]
+) -> AggregatedRating:
+    """Mean per dimension across `ratings`; an empty `ratings` yields a zero
+    `AggregatedRating` with all means `None`."""
+    rs = [r for r in ratings if r.ratee_id == ratee_id]
+    if not rs:
+        return AggregatedRating(ratee_id=ratee_id)
+    n = len(rs)
+    means = {
+        dim: sum(getattr(r, dim) for r in rs) / n for dim in PEER_DIMENSIONS
+    }
+    overall = sum(means.values()) / len(means)
+    return AggregatedRating(
+        ratee_id=ratee_id,
+        n_raters=n,
+        contribution_mean=means["contribution"],
+        collaboration_mean=means["collaboration"],
+        reliability_mean=means["reliability"],
+        communication_mean=means["communication"],
+        overall_mean=overall,
+    )

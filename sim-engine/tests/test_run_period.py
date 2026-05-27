@@ -427,12 +427,16 @@ def test_bulk_buyer_channel(pack):
     assert reports["A"].balance_sheet.articulates
 
 
-def test_tender_lowest_bid_wins(pack):
-    """In a tender, the lowest valid bid wins and supplies the required units."""
+def test_tender_lowest_bid_wins_and_delivers_in_delivery_period(pack):
+    """Lowest bid wins; delivery and revenue book in `tender.delivery_period`.
+
+    `solar-v1`'s period-2 tender has `delivery_period: 3`, so the bid
+    resolves in period 2 (the commitment is stored on the winner) and
+    the units ship — booking revenue — in period 3.
+    """
     from sim_engine.engine import build_initial_state
     from sim_engine.decisions import TenderBid
 
-    # Run period 1 first (a plain period), then bid on the period-2 tender.
     state_0 = build_initial_state(pack, company_ids=["A", "B"])
     common = dict(
         price=2_900, advertising=6_000_000, sales_force=100,
@@ -451,21 +455,39 @@ def test_tender_lowest_bid_wins(pack):
         pack,
     )
 
-    # Period 2 has a 3 000-unit tender. A bids 2 600, B bids 2 750 — A wins.
-    dec_a = _build_decision(team_id="A", period=2, **common)
-    dec_a.sales.by_product[0].tender = TenderBid(bid_price=2_600, bid_units=3000)
-    dec_b = _build_decision(team_id="B", period=2, **common)
-    dec_b.sales.by_product[0].tender = TenderBid(bid_price=2_750, bid_units=3000)
+    # Period 2: A bids low (2 600), B bids high (2 750) — A wins.
+    dec_a2 = _build_decision(team_id="A", period=2, **common)
+    dec_a2.sales.by_product[0].tender = TenderBid(bid_price=2_600, bid_units=3000)
+    dec_b2 = _build_decision(team_id="B", period=2, **common)
+    dec_b2.sales.by_product[0].tender = TenderBid(bid_price=2_750, bid_units=3000)
+    state_2, reports_2 = run_period(state_1, {"A": dec_a2, "B": dec_b2}, pack)
 
-    _, reports = run_period(state_1, {"A": dec_a, "B": dec_b}, pack)
+    # No tender revenue books in period 2 — the commitment is deferred.
+    assert "tender" not in {
+        ln.market_id for ln in reports_2["A"].market.by_market
+    }
+    a_after = state_2.company("A")
+    b_after = state_2.company("B")
+    assert len(a_after.committed_tenders) == 1, "A holds the deferred commitment"
+    commitment = a_after.committed_tenders[0]
+    assert commitment.delivery_period == 3
+    assert commitment.units == 3000
+    assert commitment.bid_price == 2_600
+    assert b_after.committed_tenders == [], "B holds no commitment"
 
-    channels_a = {ln.market_id: ln.units_sold for ln in reports["A"].market.by_market}
-    channels_b = {ln.market_id: ln.units_sold for ln in reports["B"].market.by_market}
+    # Period 3: neither team bids on the new tender; A's commitment delivers.
+    dec_a3 = _build_decision(team_id="A", period=3, **common)
+    dec_b3 = _build_decision(team_id="B", period=3, **common)
+    state_3, reports_3 = run_period(state_2, {"A": dec_a3, "B": dec_b3}, pack)
 
-    assert channels_a.get("tender", 0) == 3000, "low bidder A should win the tender"
-    assert "tender" not in channels_b, "high bidder B should not win"
-    assert reports["A"].balance_sheet.articulates
-    assert reports["B"].balance_sheet.articulates
+    channels_a = {ln.market_id: ln.units_sold for ln in reports_3["A"].market.by_market}
+    channels_b = {ln.market_id: ln.units_sold for ln in reports_3["B"].market.by_market}
+    assert channels_a.get("tender", 0) == 3000, "A's commitment delivers in period 3"
+    assert "tender" not in channels_b, "B never won, never delivers"
+    # The commitment is consumed by delivery.
+    assert state_3.company("A").committed_tenders == []
+    assert reports_3["A"].balance_sheet.articulates
+    assert reports_3["B"].balance_sheet.articulates
 
 
 def test_line_investment_grows_capacity(pack):
@@ -579,6 +601,29 @@ def test_over_dismissal_rejected(state_0, pack):
     )
     with pytest.raises(InvalidDecisionError):
         run_period(state_0, {"c1": decision}, pack)
+
+
+def test_unknown_product_in_decision_rejected(state_0, pack):
+    """A typo in a product id is rejected, not silently dropped by the engine."""
+    from sim_engine.validation import InvalidDecisionError
+
+    decision = _build_decision(
+        team_id="c1", period=1,
+        price=2_800, advertising=6_000_000, sales_force=100,
+        researchers=34, sustainability_spend=2_500_000, value_analysis_spend=1_000_000,
+        order_units=30_000, target_volume=40_000, maintenance_spend_per_line=1_000_000,
+        production_workforce_change=0, training_per_employee=500,
+        process_optimisation_spend=0, non_salary_pct=0.40, pension_reserve_pct=0.05,
+        short_term_loan=30_000_000, dividend=0,
+    )
+    # Typo: "panel_geN1" instead of "panel_gen1" — engine used to silently
+    # produce nothing and sell nothing rather than flagging the mistake.
+    decision.sales.by_product[0].product = "panel_geN1"
+    with pytest.raises(InvalidDecisionError) as excinfo:
+        run_period(state_0, {"c1": decision}, pack)
+    assert any(
+        "panel_geN1" in msg for msg in excinfo.value.errors_by_team["c1"]
+    )
 
 
 def test_non_salary_below_minimum_rejected(state_0, pack):
@@ -898,6 +943,170 @@ def test_environmental_capex_reduces_penalty(pack):
         rep_with["c1"].profit_and_loss.other_expenses
         < rep_without["c1"].profit_and_loss.other_expenses
     ), "env-tech abatement should reduce the environmental compliance penalty"
+
+
+def test_rating_index_responds_to_performance(pack):
+    """A weak period drops the rating; a strong one keeps it high.
+
+    Setup: a team that produces nothing (large losses) vs. a team running
+    a plain decision. Both start at the inherited rating; after one period
+    the loss-making team's rating is materially lower.
+    """
+    from sim_engine.engine import build_initial_state
+
+    bad = _plain_decision("c1", 1)
+    bad.production.by_product[0].target_volume = 0
+    bad.purchasing.by_product[0].order_units = 0
+
+    good = _plain_decision("c1", 1)
+
+    _, rep_bad = run_period(
+        build_initial_state(pack, company_ids=["c1"]), {"c1": bad}, pack,
+    )
+    _, rep_good = run_period(
+        build_initial_state(pack, company_ids=["c1"]), {"c1": good}, pack,
+    )
+    assert (
+        rep_bad["c1"].executive_summary.rating_index
+        < rep_good["c1"].executive_summary.rating_index
+    )
+
+
+def test_rating_surcharge_raises_borrowing_cost(pack):
+    """A low pre-period rating raises the interest rate on new debt."""
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    # Force a poor starting rating so the surcharge bites in period 1.
+    state.companies[0].rating_index = 40
+
+    state_good = build_initial_state(pack, company_ids=["c1"])
+    # Keep state_good at the scenario's starting 87.
+
+    _, rep_low = run_period(state, {"c1": _plain_decision("c1", 1)}, pack)
+    _, rep_high = run_period(
+        state_good, {"c1": _plain_decision("c1", 1)}, pack
+    )
+    # Same ST loan in both decisions → low-rated company pays more.
+    assert (
+        rep_low["c1"].profit_and_loss.interest_short_term
+        > rep_high["c1"].profit_and_loss.interest_short_term
+    )
+
+
+def test_share_price_reported_and_moves_with_performance(pack):
+    """Share price is non-zero in the report and reflects the period."""
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    _, reports = run_period(state, {"c1": _plain_decision("c1", 1)}, pack)
+    sp = reports["c1"].executive_summary.share_price
+    # Initial state share_price is 113.8; after a near-break-even period it
+    # should be in a plausible band.
+    assert sp > 0
+    # And carried on the industry line.
+    assert reports["c1"].industry.companies[0].share_price == sp
+
+
+def test_overtime_extends_capacity_at_step_cost(pack):
+    """Target above Capacity II triggers overtime up to overtime_max_pct
+    (10%), at a step fixed cost (500 k EUR) plus wage premium on overtime
+    hours. See docs/spec/03-production.md §2.3 and 04-hr.md.
+    """
+    from sim_engine.engine import build_initial_state
+
+    high_target = _plain_decision("c1", 1)
+    high_target.production.by_product[0].target_volume = 45_000
+    high_target.purchasing.by_product[0].order_units = 50_000
+
+    low_target = _plain_decision("c1", 1)
+    low_target.production.by_product[0].target_volume = 35_000
+    low_target.purchasing.by_product[0].order_units = 40_000
+
+    _, rep_overtime = run_period(
+        build_initial_state(pack, company_ids=["c1"]),
+        {"c1": high_target}, pack,
+    )
+    _, rep_normal = run_period(
+        build_initial_state(pack, company_ids=["c1"]),
+        {"c1": low_target}, pack,
+    )
+
+    units_overtime = sum(
+        ln.units_sold for ln in rep_overtime["c1"].market.by_market
+    )
+    units_normal = sum(
+        ln.units_sold for ln in rep_normal["c1"].market.by_market
+    )
+    # Overtime lifts production above the Capacity II ceiling (≈ 39 900).
+    assert units_overtime > units_normal
+    assert units_overtime > 40_000
+
+    # Subtract the extra transport (~10 EUR/unit) so we isolate the
+    # overtime cost. The step fixed cost alone (500 k EUR) clears 400 k.
+    transport_diff = (units_overtime - units_normal) * 10
+    overtime_extra = (
+        rep_overtime["c1"].profit_and_loss.other_expenses
+        - rep_normal["c1"].profit_and_loss.other_expenses
+        - transport_diff
+    )
+    assert overtime_extra > 400_000, (
+        f"overtime should add at least the 500 k step fixed cost to "
+        f"other_expenses (got extra {overtime_extra:,.0f} EUR)"
+    )
+    assert rep_overtime["c1"].balance_sheet.articulates
+
+
+def test_insolvency_flag_set_when_book_equity_goes_negative(pack):
+    """Negative book equity at period end sets the sticky is_bankrupt flag.
+
+    Catastrophic-decision setup: a team that produces nothing still pays
+    full personnel + depreciation + interest costs, so revenue from
+    opening inventory alone can't cover them — losses exceed starting
+    equity in one period.
+    """
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    assert not state.companies[0].is_bankrupt
+
+    bad = _plain_decision("c1", 1)
+    bad.production.by_product[0].target_volume = 0
+    bad.purchasing.by_product[0].order_units = 0
+
+    new_state, reports = run_period(state, {"c1": bad}, pack)
+
+    assert new_state.companies[0].is_bankrupt
+    assert reports["c1"].executive_summary.is_bankrupt
+    # The cohort-public industry line carries the flag too.
+    assert any(line.is_bankrupt for line in reports["c1"].industry.companies)
+    # Articulation must hold for a bankrupt company exactly as for a solvent one.
+    assert reports["c1"].balance_sheet.articulates
+    assert reports["c1"].cash_flow.articulates
+
+
+def test_insolvency_flag_is_sticky_once_set(pack):
+    """Once is_bankrupt is True it stays True regardless of later equity."""
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    state.companies[0].is_bankrupt = True
+
+    new_state, reports = run_period(state, {"c1": _plain_decision("c1", 1)}, pack)
+
+    assert new_state.companies[0].is_bankrupt
+    assert reports["c1"].executive_summary.is_bankrupt
+
+
+def test_solvent_company_is_not_flagged(pack):
+    """A normal first-period run keeps is_bankrupt False."""
+    from sim_engine.engine import build_initial_state
+
+    state = build_initial_state(pack, company_ids=["c1"])
+    new_state, reports = run_period(state, {"c1": _plain_decision("c1", 1)}, pack)
+
+    assert not new_state.companies[0].is_bankrupt
+    assert not reports["c1"].executive_summary.is_bankrupt
 
 
 def test_determinism(state_0, default_decision_p1, pack):

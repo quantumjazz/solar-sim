@@ -17,17 +17,19 @@ The period loop has three phases:
      all articulation identities holding.
 
 Implemented: multi-team cohorts, the full attraction model, period events,
-bulk/tender channels, the export market with FX, HR productivity indices I
-and II, auto-scaled purchasing/admin headcount, production-line
-invest/disinvest, successor-product launch, decision validation, the
-industry report, and environmental tech with end-of-pipe abatement.
+bulk/tender channels (with deferred-delivery lag), the export market with
+FX, HR productivity indices I and II, auto-scaled purchasing/admin
+headcount, production-line invest/disinvest, overtime (Available Capacity
+III), successor-product launch, decision validation, the industry report,
+environmental tech with end-of-pipe abatement, insolvency flag, dynamic
+credit rating with interest surcharge, and share price.
 
-Still simplified (TODO markers in code):
-  - Tender delivery-period lag — won tenders deliver in the current period
-  - Overtime (Available Capacity III) — production caps at Capacity II
+Still simplified:
   - Rationalisation spend is booked as cost but does not raise capacity
-  - rating_index and image/satisfaction indices are not yet dynamic
-  - share price is not yet modelled
+  - image_index / satisfaction_index are inert (`_update_slow_indices` is
+    a no-op); once dynamic, satisfaction feeds back into the rating
+  - Rating uses 7 of 11 spec components; share price uses 4 of 14
+    drivers — pilot calibration pending (see docs/spec/05-finance.md §11)
 """
 
 from __future__ import annotations
@@ -59,6 +61,7 @@ from sim_engine.scenario import (
 from sim_engine.validation import InvalidDecisionError, validate_decision
 from sim_engine.state import (
     BalanceSheet,
+    CommittedTender,
     CompanyState,
     CostCentreState,
     InventoryRecord,
@@ -245,6 +248,7 @@ def _build_industry_report(
                     100.0 * units / total_units if total_units > 0 else 0.0
                 ),
                 share_price=r.executive_summary.share_price,
+                is_bankrupt=r.executive_summary.is_bankrupt,
             )
         )
 
@@ -791,7 +795,7 @@ def _apply_production(
     to each product's target volume weighted by its capacity-per-line-unit.
     """
 
-    total_capacity = sum(capacity_by_type.values())
+    total_capacity_ii = sum(capacity_by_type.values())
     prod_cc = company.cost_centres["production"]
     spec_by_id = {p.id: p for p in ctx.products}
 
@@ -811,6 +815,19 @@ def _apply_production(
         )
     total_weighted = sum(weighted_targets.values())
 
+    # Available Capacity III — overtime (docs/spec/03-production.md §2.3).
+    # If aggregate target exceeds Capacity II, the engine schedules overtime
+    # automatically up to `overtime_max_pct`; both line and staff hours
+    # scale by the same overtime_factor (workers operate the lines for the
+    # extra hours).
+    overtime_max_pct = ctx.world.hr.overtime_max_pct
+    if total_capacity_ii > 0 and total_weighted > total_capacity_ii:
+        shortfall_ratio = (total_weighted - total_capacity_ii) / total_capacity_ii
+        overtime_factor = 1.0 + min(overtime_max_pct, shortfall_ratio)
+    else:
+        overtime_factor = 1.0
+    total_capacity_iii = total_capacity_ii * overtime_factor
+
     for p_dec in decision.production.by_product:
         if not _producible(p_dec.product):
             scratch.units_produced[p_dec.product] = 0.0
@@ -818,20 +835,22 @@ def _apply_production(
         spec = spec_by_id[p_dec.product]
         product_state = company.products[p_dec.product]
 
-        # Staff-bound: actual productivity = base × Index I × Index II.
+        # Staff-bound: actual productivity = base × Index I × Index II, with
+        # overtime hours extending the per-person capacity.
         per_person = (
             spec.production_capacity_per_person
             * company.productivity_index_i
             * product_state.productivity_index_ii
+            * overtime_factor
         )
         staff_capacity = prod_cc.headcount * per_person
 
-        # Line-bound: this product's slice of the shared production capacity.
+        # Line-bound: this product's slice of the shared (Capacity III) pool.
         if total_weighted > 0:
             share = weighted_targets[p_dec.product] / total_weighted
         else:
             share = 0.0
-        line_capacity = (total_capacity * share) / spec.capacity_per_line_unit
+        line_capacity = (total_capacity_iii * share) / spec.capacity_per_line_unit
 
         # Material-bound: how much can current materials inventory support?
         inv = company.inventories_materials[p_dec.product]
@@ -871,6 +890,18 @@ def _apply_production(
                 units / prev_cumulative
             )
         product_state.cumulative_units_produced += units
+
+    # Overtime costs (docs/spec/03-production.md §2.3, 04-hr.md). When any
+    # overtime is scheduled the team incurs a one-off step fixed cost and a
+    # wage premium on the overtime hours only.
+    if overtime_factor > 1.0:
+        scratch.total_overhead_other += ctx.world.hr.overtime_step_fixed_cost
+        regular_production_wages = prod_cc.headcount * prod_cc.salary_per_capita
+        scratch.total_overhead_other += (
+            regular_production_wages
+            * ctx.world.hr.overtime_wage_premium_pct
+            * (overtime_factor - 1.0)
+        )
 
 
 def _apply_inventory_post_production(
@@ -964,10 +995,15 @@ def _settle_market(
     # committed[cid][product_id] = units already sold via tender + bulk.
     committed: Dict[str, Dict[str, int]] = {cid: {} for cid in companies}
 
-    # --- Channel 1: tenders (priority 1) -----------------------------------
+    # --- Channel 1a: deferred tenders won in earlier periods --------------
+    # Settled before current-period tenders so newly-deferred ones (whose
+    # delivery_period > ctx.period) don't get picked up here in the same run.
+    _settle_committed_tenders(companies, ctx, scratches, committed)
+
+    # --- Channel 1b: current-period tenders --------------------------------
     for tender in ctx.tenders:
         if tender.product in active_product_ids:
-            _resolve_tender(tender, companies, decisions, scratches, committed)
+            _resolve_tender(tender, companies, decisions, scratches, committed, ctx)
 
     # --- Channel 2: bulk buyers (priority 2) -------------------------------
     for bulk in ctx.bulk_buyers:
@@ -1019,11 +1055,15 @@ def _resolve_tender(
     decisions: Dict[str, TeamDecision],
     scratches: Dict[str, _PeriodScratch],
     committed: Dict[str, Dict[str, int]],
+    ctx: ResolvedPeriodContext,
 ) -> None:
-    """Award a tender to the lowest valid bidder; deliver in the current period.
+    """Award a tender to the lowest valid bidder.
 
-    TODO(v0.3): honour tender.delivery_period — won tenders should be carried
-    as a commitment and delivered in a later period.
+    Delivery and revenue book in `tender.delivery_period`. If that is the
+    current period, settle immediately (the historical behaviour). If it
+    is later, store the obligation on the winner's `committed_tenders`
+    ledger and settle in the delivery period via
+    `_settle_committed_tenders` (docs/spec/01-sales.md §3.1).
     """
     # Collect valid bids; iterate sorted by company id for deterministic ties.
     bids: List[Tuple[float, str]] = []
@@ -1049,6 +1089,23 @@ def _resolve_tender(
 
     bids.sort()  # lowest price first; ties already broken by sorted cid
     winning_price, winner = bids[0]
+
+    # Deferred delivery: store the commitment, do not settle now. Inventory
+    # is reserved at delivery time, not at bid time.
+    if tender.delivery_period > ctx.period:
+        companies[winner].committed_tenders.append(
+            CommittedTender(
+                won_in_period=ctx.period,
+                product=tender.product,
+                market=tender.market,
+                units=tender.units_required,
+                bid_price=winning_price,
+                delivery_period=tender.delivery_period,
+            )
+        )
+        return
+
+    # Same-period delivery: settle now.
     available = _available_inventory(companies[winner], tender.product, committed)
     units = min(tender.units_required, available)
     committed[winner][tender.product] = (
@@ -1058,6 +1115,45 @@ def _resolve_tender(
     _record_sale(
         scratches[winner], tender.product, "tender", units, units * winning_price, 0.0
     )
+
+
+def _settle_committed_tenders(
+    companies: Dict[str, CompanyState],
+    ctx: ResolvedPeriodContext,
+    scratches: Dict[str, _PeriodScratch],
+    committed: Dict[str, Dict[str, int]],
+) -> None:
+    """Ship and book any committed tenders whose `delivery_period` is now.
+
+    A team that won a tender in period *t* with `delivery_period = t + 1`
+    has its inventory tapped here in period *t + 1*, before any current-
+    period tender or retail allocation. If inventory falls short of the
+    committed units the team ships what it has — the MVP does not model a
+    non-delivery penalty (a future refinement; see 01-sales.md §3.1).
+    """
+    for cid in sorted(companies):
+        company = companies[cid]
+        if not company.committed_tenders:
+            continue
+        remaining: List[CommittedTender] = []
+        for tender in company.committed_tenders:
+            if tender.delivery_period != ctx.period:
+                remaining.append(tender)
+                continue
+            available = _available_inventory(company, tender.product, committed)
+            units = min(tender.units, available)
+            committed[cid][tender.product] = (
+                committed[cid].get(tender.product, 0) + units
+            )
+            _record_sale(
+                scratches[cid],
+                tender.product,
+                "tender",
+                units,
+                units * tender.bid_price,
+                0.0,
+            )
+        company.committed_tenders = remaining
 
 
 def _resolve_bulk(
@@ -1217,17 +1313,14 @@ def _company_attractiveness(
     coeffs = market.coefficients
     product_state = company.products[product_id]
 
-    # We score factors against neutral reference values: price uses a
-    # scenario-set anchor, advertising/sf use the saturation references,
-    # indices use 100.
-    # TODO(v0.3): move PRICE_ANCHOR into the market/product spec rather
-    # than hard-coding it here.
-    PRICE_ANCHOR = 2_800.0  # solar-v1 panel_gen1 retail anchor (base currency)
+    # We score factors against neutral reference values: price uses the
+    # scenario-set anchor on the market's coefficients, advertising/sf use
+    # the saturation references, indices use 100.
     REF_INDEX = 100.0
 
     price_in_base = m_dec.price / fx if fx else m_dec.price
     price_factor = (
-        (PRICE_ANCHOR / price_in_base) ** coeffs.beta_price
+        (coeffs.price_anchor / price_in_base) ** coeffs.beta_price
         if price_in_base > 0
         else 1.0
     )
@@ -1424,6 +1517,148 @@ def _apply_depreciation_and_overhead(
                 scratch.total_overhead_other += penalty
 
 
+# ---------------------------------------------------------------------------
+# Credit rating, interest-rate surcharge, and share price
+# ---------------------------------------------------------------------------
+#
+# Implements `docs/spec/05-finance.md` §4 (rating) and §5 (share price)
+# with the MVP simplifications noted in 05-finance.md §11.x:
+#
+# - Rating uses 7 of the spec's 11 components — the ones computable from
+#   single-period engine state without time-series history. Components
+#   that need EMAs (net-income trend, planning-quality trend) and ones
+#   sourced from inactive indices (customer satisfaction is currently a
+#   no-op) are deferred. Weights are renormalised to 1.0 over the
+#   included components.
+#
+# - Share price uses 4 drivers (ROE, ROS, equity level, debt/equity)
+#   instead of the spec's 14. The β coefficients are initial values and
+#   need pilot calibration to reproduce the "baseline ≈ flat / breakout
+#   ≈ ±20-30 %" target in 05-finance.md §5.
+#
+# - The rating index at period end takes effect on next period's
+#   interest rates (we apply `_rating_surcharge(company_before.rating)`
+#   when computing interest). This matches the "floating LT rate" intent
+#   in §1.2.
+
+
+def _score_component(value: float, low: float, high: float) -> float:
+    """Linear 0-100 score with `low` mapped to 0 and `high` to 100, clamped."""
+    if high == low:
+        return 50.0
+    return max(0.0, min(100.0, (value - low) / (high - low) * 100.0))
+
+
+def _score_inverted(value: float, good_at: float, bad_at: float) -> float:
+    """As above but inverted — `good_at` → 100, `bad_at` → 0."""
+    if bad_at == good_at:
+        return 50.0
+    return max(0.0, min(100.0, (bad_at - value) / (bad_at - good_at) * 100.0))
+
+
+#: Rating-table entries (`(score, surcharge)`) from `05-finance.md` §4.2.
+#: The function interpolates linearly between them.
+_RATING_SURCHARGE_TABLE = (
+    (0, 0.100),
+    (20, 0.070),
+    (30, 0.050),
+    (40, 0.035),
+    (50, 0.020),
+    (60, 0.010),
+    (70, 0.000),
+    (80, -0.005),
+    (90, -0.010),
+    (100, -0.010),
+)
+
+
+def _rating_surcharge(rating: float) -> float:
+    """Map a rating in [0, 100] to an interest-rate surcharge (e.g. +2 %).
+
+    See `docs/spec/05-finance.md` §4.2 for the table.
+    """
+    rating = max(0.0, min(100.0, rating))
+    for i in range(len(_RATING_SURCHARGE_TABLE) - 1):
+        r0, s0 = _RATING_SURCHARGE_TABLE[i]
+        r1, s1 = _RATING_SURCHARGE_TABLE[i + 1]
+        if r0 <= rating <= r1:
+            if r1 == r0:
+                return s0
+            t = (rating - r0) / (r1 - r0)
+            return s0 + t * (s1 - s0)
+    return 0.0
+
+
+def _compute_rating(
+    *,
+    book_equity: float,
+    total_assets: float,
+    total_debt: float,
+    overdraft_amount: float,
+    operating_cash_flow: float,
+    net_income: float,
+    motivation_index: float,
+    productivity_index_i: float,
+) -> float:
+    """Composite credit-rating score in [0, 100].
+
+    MVP — uses the seven components that are computable from a single
+    period's engine state, with weights renormalised to 1.0. See
+    `docs/spec/05-finance.md` §4.1 for the spec's full 11-component
+    composite; the remaining four need history (EMA-style) or inputs
+    from indices that are presently inert in the engine.
+    """
+    equity_ratio = book_equity / total_assets if total_assets > 0 else 0.0
+    overdraft_ratio = (
+        overdraft_amount / book_equity
+        if book_equity > 0
+        else (1.0 if overdraft_amount > 0 else 0.0)
+    )
+    ocf_over_debt = (
+        operating_cash_flow / total_debt if total_debt > 0 else 1.0
+    )
+
+    return (
+        0.25 * _score_component(equity_ratio, 0.0, 0.5)
+        + 0.15 * _score_component(book_equity / 1_000_000.0, 0.0, 50.0)
+        + 0.15 * _score_inverted(overdraft_ratio, 0.0, 0.30)
+        + 0.15 * _score_component(ocf_over_debt, 0.0, 0.30)
+        + 0.15 * _score_component(net_income / 1_000_000.0, -5.0, 10.0)
+        + 0.10 * _score_component(motivation_index, 50.0, 150.0)
+        + 0.05 * _score_component(productivity_index_i, 0.5, 1.5)
+    )
+
+
+# Share-price model — initial constants per `05-finance.md` §5; pilot
+# calibration will replace these with values that reproduce the §5
+# acceptance criteria (baseline ≈ flat, breakout ≈ +20-30%, failing ≈
+# -20-30%).
+_SHARE_PRICE_BASE = 100.0      # EUR/share — a low starting reference
+_SP_BETA_ROE = 100.0           # EUR per 100% ROE
+_SP_BETA_ROS = 50.0            # EUR per 100% ROS
+_SP_BETA_EQ_MILLION = 0.7      # EUR per 1m EUR of book equity
+_SP_BETA_DEBT_EQUITY = 30.0    # EUR per 100% of debt-to-equity
+
+
+def _compute_share_price(
+    *,
+    return_on_equity: float,
+    return_on_sales: float,
+    book_equity: float,
+    total_debt: float,
+) -> float:
+    """Share-price proxy from a few core drivers. Returns EUR/share, ≥ 0."""
+    debt_equity = total_debt / book_equity if book_equity > 0 else 0.0
+    return max(
+        0.0,
+        _SHARE_PRICE_BASE
+        + _SP_BETA_ROE * return_on_equity
+        + _SP_BETA_ROS * return_on_sales
+        + _SP_BETA_EQ_MILLION * (book_equity / 1_000_000.0)
+        - _SP_BETA_DEBT_EQUITY * debt_equity,
+    )
+
+
 def _articulate(
     company_before: CompanyState,
     company_after: CompanyState,
@@ -1482,16 +1717,22 @@ def _articulate(
 
     # ---- Interest ----
     fin_world = world.finance
-    interest_short = company_after.short_term_loan.amount * (
-        decision.finance.short_term_loan or 0
-    ) * 0  # placeholder: interest is on the NEW short-term loan or the carried one
-    # For MVP: interest on short_term = scheduled new draw × scenario rate
-    interest_short_term = decision.finance.short_term_loan * fin_world.short_term_loan_rate
-    interest_long_term = (
-        company_before.long_term_loan.amount * company_before.long_term_loan.rate
-        + decision.finance.long_term_loan * fin_world.long_term_loan_rate
+    # Rating-based surcharge uses last period's rating (see 05-finance.md §1.2
+    # — "floating" LT rate re-prices each period to the company's current
+    # rating). At period 1 this is the inherited starting rating.
+    rating_surcharge = _rating_surcharge(company_before.rating_index)
+    interest_short_term = decision.finance.short_term_loan * (
+        fin_world.short_term_loan_rate + rating_surcharge
     )
-    interest_overdraft = company_before.overdraft.amount * company_before.overdraft.rate
+    interest_long_term = (
+        company_before.long_term_loan.amount
+        * (fin_world.long_term_loan_rate + rating_surcharge)
+        + decision.finance.long_term_loan
+        * (fin_world.long_term_loan_rate + rating_surcharge)
+    )
+    interest_overdraft = company_before.overdraft.amount * (
+        fin_world.overdraft_rate + rating_surcharge
+    )
 
     investment_income = company_before.securities * fin_world.securities_rate
 
@@ -1633,6 +1874,20 @@ def _articulate(
     company_after.last_period_net_income = net_income
     company_after.last_dividend_declared = decision.finance.dividend
 
+    # Insolvency check (docs/spec/05-finance.md §11): if book equity is
+    # negative at period end, set the sticky `is_bankrupt` flag. A bankrupt
+    # company keeps playing — the flag is a pedagogical signal, not a
+    # game-over.
+    book_equity_end = (
+        company_after.subscribed_capital
+        + company_after.capital_reserves
+        + company_after.retained_earnings
+        + net_income
+    )
+    company_after.is_bankrupt = (
+        company_before.is_bankrupt or book_equity_end < 0
+    )
+
     # ---- Production-line NBV ----
     production_lines_nbv = sum(
         line.purchase_value * (line.remaining_life / line.useful_life)
@@ -1729,6 +1984,41 @@ def _articulate(
         ),
     )
 
+    # ---- Update dynamic indices: credit rating and share price ----
+    # Rating uses end-of-period numbers; it takes effect on *next* period's
+    # interest rates (this period already priced its loans using
+    # `company_before.rating_index`, see §1.2 floating-rate intent).
+    equity_start_for_roe = (
+        company_before.subscribed_capital
+        + company_before.capital_reserves
+        + company_before.retained_earnings
+    )
+    total_debt_end = (
+        company_after.short_term_loan.amount
+        + company_after.long_term_loan.amount
+        + company_after.overdraft.amount
+    )
+    company_after.rating_index = _compute_rating(
+        book_equity=book_equity_end,
+        total_assets=bs.total_assets,
+        total_debt=total_debt_end,
+        overdraft_amount=company_after.overdraft.amount,
+        operating_cash_flow=operating_cf,
+        net_income=net_income,
+        motivation_index=company_after.motivation_index,
+        productivity_index_i=company_after.productivity_index_i,
+    )
+    company_after.share_price = _compute_share_price(
+        return_on_equity=(
+            net_income / equity_start_for_roe if equity_start_for_roe > 0 else 0.0
+        ),
+        return_on_sales=(
+            pl.operating_income / pl.sales_revenue if pl.sales_revenue > 0 else 0.0
+        ),
+        book_equity=book_equity_end,
+        total_debt=total_debt_end,
+    )
+
     return pl, bs, cf
 
 
@@ -1737,8 +2027,13 @@ def _update_slow_indices(
     decision: TeamDecision,
     scratch: _PeriodScratch,
 ) -> None:
-    """Placeholder for v0.1 — image, satisfaction, motivation evolve here in full spec."""
-    # v0.2: implement motivation/image/satisfaction dynamics from spec §4.
+    """No-op stub: image_index and satisfaction_index are not yet dynamic.
+
+    Motivation is already updated inside `_apply_hr`. Once image/
+    satisfaction dynamics land (docs/spec/04-hr.md §4 and the customer-
+    satisfaction component of `_compute_rating`), they will be computed
+    here.
+    """
     pass
 
 
@@ -1761,7 +2056,7 @@ def _build_executive_summary(
         period=period,
         company_id=company.id,
         company_name=company.name,
-        share_price=0,  # v0.2 — full share price model
+        share_price=company.share_price,
         net_income=pl.net_income,
         revenue=pl.sales_revenue,
         operating_income=pl.operating_income,
@@ -1769,6 +2064,7 @@ def _build_executive_summary(
         return_on_sales=ros,
         cash_balance=cf.cash_end,
         rating_index=company.rating_index,
+        is_bankrupt=company.is_bankrupt,
     )
 
 

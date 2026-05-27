@@ -153,14 +153,167 @@ revise it as the simulation proceeds.
 
 ---
 
-## 3. Deliberately out of scope (first pass)
+## 3. Peer assessment
+
+Each student rates every other member of their team on four dimensions,
+plus an optional free-text comment per teammate. Ratings are visible to
+the instructor in full; ratees see only their own aggregated per-dimension
+averages, and only once the cohort has finished — the standard
+anonymity-to-ratee pattern in classroom peer assessment (`sources.md` §8:
+Topping 2009; Fellenz 2006).
+
+### 3.1 Dimensions and scale
+
+| Dimension      | What it captures                                              |
+|----------------|---------------------------------------------------------------|
+| Contribution   | Share of useful work done                                     |
+| Collaboration  | Willingness to work with others; supportiveness               |
+| Reliability    | Meeting commitments, attendance, follow-through               |
+| Communication  | Clarity, responsiveness, sharing information                  |
+
+Each on an integer **1–5 Likert scale** (5 highest), plus an optional
+free-text **comments** field. The multi-dimensional "evaluation of
+individual contributions" pattern follows Fellenz (2006).
+
+### 3.2 Cadence and editing
+
+Each rating is **one row per (rater, ratee) per cohort**. The rater can
+edit any time the cohort is `active`; when the cohort moves to
+`finished`, ratings are locked and the service refuses further writes.
+
+### 3.3 Visibility
+
+- **The rater** sees their own draft ratings any time.
+- **The ratee** sees aggregated per-dimension averages of all ratings they
+  received, plus the count of raters, **only after the cohort closes**.
+  Comments are *not* shown to the ratee in this first pass (a possible
+  refinement is to share them anonymised); they go to the instructor.
+- **The instructor** sees everything: rater identity, scores, comments,
+  per-team aggregates and the full rater→ratee matrix.
+
+### 3.4 Data model
+
+One row per (cohort × rater × ratee):
+
+```
+peer_ratings
+  cohort_id      INTEGER, FK cohorts(id)
+  rater_id       INTEGER, FK users(id)
+  ratee_id       INTEGER, FK users(id)
+  contribution   INTEGER, CHECK 1..5
+  collaboration  INTEGER, CHECK 1..5
+  reliability    INTEGER, CHECK 1..5
+  communication  INTEGER, CHECK 1..5
+  comments       TEXT
+  updated_at     TEXT (ISO-8601)
+PK (cohort_id, rater_id, ratee_id)
+```
+
+The schema's CHECK constraints catch out-of-range scores at the database
+boundary; the service layer adds three rules that aren't expressible in
+schema:
+
+- **Rater ≠ ratee** — no self-rating in this first pass.
+- **Same team** — rater and ratee must both be members of the same team
+  in the cohort at the moment the rating is saved.
+- **Cohort still active** — once the cohort is `finished`, ratings are
+  locked.
+
+### 3.5 Aggregation
+
+The aggregated view shown to the ratee (after close) and to the
+instructor (any time) is the unweighted mean per dimension across all
+that ratee's raters, plus the count of raters. Pure functions in
+`app/pedagogy.py` (`aggregate_ratings`) compute this; the service layer
+fetches the rows.
+
+### 3.6 Deliberately out of scope (first pass)
+
+- **Self-assessment.** Including self-ratings as a calibration mechanism
+  is a possible refinement.
+- **Per-period ratings.** This pass takes one rating per (rater, ratee)
+  per cohort; per-period ratings would require a `period` column and a
+  different UI flow.
+- **Weighted aggregation / trimmed means.** All ratings are averaged
+  equally; outlier protection (trimming, weighting by rater consistency)
+  can come later.
+- **Comments to ratees.** Comments go to the instructor only in this
+  first pass; sharing them anonymised to ratees is the obvious next
+  refinement.
+- **Team-membership churn.** A rating persists if its ratee is later
+  moved to a different team mid-cohort; the rate-form only shows
+  *current* teammates, so the rater cannot edit a "stale" rating. The
+  instructor can clear stale ratings out-of-band if needed.
+
+---
+
+## 4. Board-meeting export
+
+The capstone deliverable. A team's work over the cohort is packaged into
+a single portable **Markdown** document, downloadable from the app and
+suitable for sharing, printing, or converting to PDF / DOCX via pandoc.
+
+### 4.1 Why Markdown
+
+Markdown carries the project's no-third-party-dependency stance:
+generation is a pure string-build, it renders natively as a Streamlit
+preview, and downstream conversion to PDF or DOCX is one `pandoc` (or
+text-editor paste) away. A native PDF / DOCX exporter is a possible
+future refinement.
+
+### 4.2 Document structure
+
+A board-meeting document has, in order:
+
+1. **Cover** — cohort name, team name, team members, generated date,
+   period range played.
+2. **Cohort standing** — final-period industry table (the team
+   highlighted) with revenue, operating income, net income, equity,
+   total debt, and market share.
+3. **Period-by-period** — for each completed period: the headline
+   executive summary, market lines, P&L summary, balance-sheet check,
+   and cash-flow totals.
+4. **Planning quality** — headline score plus the per-period KPI table.
+5. **Strategy map** — the four balanced-scorecard perspectives as the
+   team authored them.
+6. **Peer assessment** — visibility-gated; see §4.3.
+
+### 4.3 Viewer-role visibility
+
+The same document generator runs for two viewer roles, and the peer
+assessment section is filtered accordingly:
+
+- **Student viewer.** Only their own aggregated per-dimension averages,
+  and only if the cohort is `finished` (matches §3.3). Other teammates'
+  ratings, comments, and the full matrix are excluded.
+- **Instructor viewer.** The full per-team aggregates and the rater→
+  ratee detail including comments, any time.
+
+### 4.4 Where it lives
+
+A pure renderer in `app/board_export.py` takes a data bundle and returns
+the Markdown string. `app/service.py` orchestrates the fetch from SQLite
+and the viewer-role visibility filtering. The Streamlit tab in
+`app/app.py` calls the service, renders the document as a preview, and
+offers an `st.download_button` save-as-Markdown.
+
+### 4.5 Deliberately out of scope (first pass)
+
+- **PDF / DOCX export.** A future refinement; would add a library
+  dependency.
+- **Custom templates.** The document structure is fixed; per-course
+  template customisation is a later concern.
+- **Multi-team consolidated reports.** The export is per team; an
+  instructor wanting a cohort-wide deliverable currently exports each
+  team's document and combines manually.
+
+---
+
+## 5. Deliberately out of scope (whole pedagogy layer)
 
 These are real concerns the pedagogy layer will eventually address.
-They are not in the first pass:
+They are not in the current scope:
 
-- **Peer assessment** and **board-meeting export** — the other two
-  pedagogy-layer features listed in `docs/current-task.md`. Each is its
-  own follow-up phase.
 - **Automated strategy-map grading.** The map is graded by the
   instructor against the course rubric, not by the engine.
 - **Strategy-map version history.** Only the current version is stored;

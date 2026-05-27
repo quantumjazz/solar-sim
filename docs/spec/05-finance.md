@@ -169,6 +169,19 @@ broader — it incorporates operational and customer-experience drivers that
 modern credit agencies factor in (Moody's, S&P methodology papers cite
 similar non-financial components).
 
+> **Implementation note (MVP).** The engine currently scores **seven** of
+> the eleven components — the ones computable from single-period engine
+> state without time-series history. Weights are renormalised to 1.0
+> over `equity_ratio` (0.25), `equity_absolute` (0.15),
+> `overdraft_severity` (0.15), `OCF/debt` (0.15), `net_income` (0.15),
+> `motivation_index` (0.10), and `productivity_total` (0.05). The
+> remaining four — `customer_satisfaction` (the index is currently
+> inert), `net_income_trend` and `planning_quality_trend` (need
+> period-history EMAs), and `efficiency_vs_industry` (needs the
+> cohort-public industry view inside the engine) — are deferred. The
+> rating index that emerges from this MVP is already directional with
+> performance; pilot calibration will refine the bands.
+
 ### 4.2 Rating → interest-rate surcharge
 
 ```
@@ -231,6 +244,15 @@ This is **not** an attempt at a valuation model. It is a teaching device
 that makes the link between management decisions and shareholder value
 legible. Sources §6 cites the literature on intangibles-and-valuation; the
 caveats are documented in `docs/sources.md`.
+
+> **Implementation note (MVP).** The engine currently uses **four** of
+> the spec's value drivers — `return_on_equity`, `return_on_sales`,
+> `book_equity` (level), and `debt_to_equity` (penalty) — with an
+> additive constant `β_0` of 100 EUR/share. The other drivers
+> (dividends, marketing, image, planning quality, R&D cumulative, etc.)
+> are pending integration with their engine-side sources. Initial β
+> coefficients are placeholders; pilot calibration will replace them
+> with values that reproduce the §5 acceptance criteria above.
 
 ### 5.1 Shareholder earnings
 
@@ -339,7 +361,59 @@ respectively; both calibrated during pilot.
 
 ---
 
-## 11. What's deliberately not here
+## 11. Insolvency
+
+A company is **insolvent** at the end of period *t* if its book equity is
+negative — equivalently, total assets fall below total liabilities plus
+the pension reserve. This is the simulation's analogue of going below the
+balance-sheet line that classical bankruptcy law uses as a trigger.
+
+### 11.1 Trigger and flag
+
+```
+book_equity(t) = subscribed_capital + capital_reserves
+               + retained_earnings + net_income_for_period
+is_bankrupt(t) = book_equity(t) < 0
+```
+
+Once `is_bankrupt` becomes `True` it stays `True` for the rest of the
+cohort — the flag is sticky. In this first pass there is no equity-
+injection mechanism that would clear it. (A "rescue financing" event
+would be a scenario-pack extension; out of scope here.)
+
+### 11.2 No engine-flow change
+
+A bankrupt company **continues to play**: the engine still validates and
+runs its decisions, the auto-overdraft still fires when cash dips below
+`min_cash`, depreciation and interest continue to accrue, and the
+company remains in the cohort's industry report. The pedagogical aim is
+that students see the consequences of insolvency — large overdraft
+balances, mounting interest, a poor rating — rather than being removed
+from the simulation.
+
+### 11.3 Reporting
+
+The `is_bankrupt` flag is surfaced in:
+
+- the team's `ExecutiveSummary` (`is_bankrupt`),
+- each row of the cohort `IndustryReport` (`is_bankrupt`), so competing
+  teams can see who is in trouble.
+
+The instructor's UI marks bankrupt teams with a visible tag in the
+submission dashboard and reports view.
+
+### 11.4 Articulation
+
+The articulation invariant (assets = liabilities + equity; cash-flow
+roll-forward; equity roll-forward) holds in every period — for solvent
+*and* bankrupt companies. Insolvency is a **report** of state, not a
+state mutation. The book-equity arithmetic that triggers the flag is
+also the book-equity arithmetic that drives the balance sheet; both come
+from the same `net_income_for_period`.
+
+---
+
+## 12. What's deliberately not here
 
 - Cash-flow articulation itself → `06-accounting.md` §7
 - Auto-overdraft trigger logic → `06-accounting.md` §7.2

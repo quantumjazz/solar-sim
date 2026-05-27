@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from db import Database
@@ -25,6 +26,11 @@ _ALGORITHM = "pbkdf2_sha256"
 _ITERATIONS = 200_000
 _SALT_BYTES = 16
 _MIN_PASSWORD_LEN = 8
+
+#: How long a cookie-backed session stays valid before the user must log in.
+SESSION_DURATION = timedelta(days=7)
+#: Cookie name carrying the session token in the browser.
+SESSION_COOKIE = "solar_sim_session"
 
 ROLES = ("instructor", "student")
 
@@ -118,3 +124,38 @@ def authenticate(
     if not verify_password(password, user["password_hash"]):
         return None
     return user
+
+
+# ---------------------------------------------------------------------------
+# Cookie-backed sessions
+# ---------------------------------------------------------------------------
+
+
+def create_session(db: Database, user_id: int) -> str:
+    """Mint a random session token for `user_id` and persist it.
+
+    Returns the token string. The caller puts it in a browser cookie; the
+    record in the database includes the user id and an expiry timestamp
+    (now + `SESSION_DURATION`).
+    """
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + SESSION_DURATION).isoformat()
+    db.create_session(token, user_id, expires_at)
+    return token
+
+
+def lookup_session(db: Database, token: str) -> Optional[sqlite3.Row]:
+    """Return the user row backing `token` if the session is valid, else None.
+
+    Expired session rows are pruned opportunistically on lookup.
+    """
+    db.purge_expired_sessions()
+    row = db.lookup_session(token)
+    if row is None:
+        return None
+    return db.get_user(int(row["user_id"]))
+
+
+def end_session(db: Database, token: str) -> None:
+    """Invalidate a session token (the database row is deleted)."""
+    db.delete_session(token)

@@ -252,6 +252,7 @@ markets:
         efficiency: 0.5
         sustainability: 0.3
         value_analysis: 0.2
+      price_anchor: 2_800              # EUR/unit — panel_gen1 retail anchor
       ads_ref: 12_000_000
       sf_ref: 200
       ci_ref: 3_000_000
@@ -281,6 +282,7 @@ markets:
         efficiency: 0.6
         sustainability: 0.2
         value_analysis: 0.2
+      price_anchor: 2_800              # EUR/unit (export price is FX-converted before comparison)
       ads_ref: 5_000_000
       sf_ref: 80
       ci_ref: 3_000_000

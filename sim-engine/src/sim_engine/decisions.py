@@ -2,10 +2,6 @@
 
 A team submits one `TeamDecision` per period. The schema mirrors the six
 decision areas defined in `docs/spec/00-overview.md` §3.
-
-For the v0.1 MVP, several sub-sections are stubbed (sales tender, multi-product
-R&D, multi-market sales). Their fields are present so callers can begin
-populating them, but the engine ignores them until v0.2.
 """
 
 from __future__ import annotations
@@ -73,19 +69,19 @@ class ProductionByProductDecision(BaseModel):
 class LineInvestDecision(BaseModel):
     """How many lines of each catalog type to buy this period."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     # keys are catalog type_ids, values are counts; we use a Dict for flexibility
     counts: Dict[str, int] = Field(default_factory=dict)
 
 
 class LineMaintenanceDecision(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     # keys are catalog type_ids, values are EUR per line per period
     spend_per_line: Dict[str, float] = Field(default_factory=dict)
 
 
 class LineRationalisationDecision(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     spend_per_line: Dict[str, float] = Field(default_factory=dict)
 
 
@@ -129,7 +125,7 @@ class FinanceDecision(BaseModel):
 class TeamDecision(BaseModel):
     """One team's full decision for one period."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     team_id: str
     period: int
