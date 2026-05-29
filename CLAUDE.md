@@ -35,6 +35,15 @@ registration form then asks for the matching token whenever someone
 chooses the "Instructor" role. Leave unset to keep instructor
 registration open (the historical default).
 
+**Dev-mode default admin.** When the env var above is unset *and* the
+database is empty, the app seeds a single instructor account
+(`admin@solar-sim.local` / `tester`) so a fresh clone is testable
+without going through registration. The Log in tab shows this hint.
+Production deployments that set the env var get **no seed** — that
+way a hardcoded password can never accidentally ship live. Delete the
+row from the `users` table to remove the seed once you've created
+your own account.
+
 As of 2026-05-29: 36 engine tests + 67 app tests, all passing. Runtime
 dependencies: `pydantic` (v2), `pyyaml`, `streamlit`, and
 `extra-streamlit-components` (cookies for the multi-user app's

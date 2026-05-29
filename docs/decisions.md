@@ -337,3 +337,50 @@ limitation). Tests added in `app/test_phase3.py`:
 `test_instructor_registration_accepts_correct_token`,
 `test_student_registration_ignores_instructor_token`.
 **Status: adopted.**
+
+### 27. Seed a dev-mode default admin account
+
+A tester cloning the repo had to register before they could see
+anything beyond the login screen — three form fields and a role
+dropdown stand between them and a working instructor view. For a
+codebase whose README leads with "open-source, run on your own
+infrastructure", that's a non-trivial first-mile friction.
+
+Fix: on every `Database` construction, `auth.ensure_default_admin`
+seeds one instructor account — `admin@solar-sim.local` / `tester` —
+when both conditions hold:
+
+1. The database has no users yet (fresh install).
+2. `SOLAR_SIM_INSTRUCTOR_TOKEN` is unset (i.e., the deployment is *not*
+   in classroom-lockdown mode).
+
+The seed bypasses `register_user` deliberately: the password `tester`
+is shorter than the 8-character minimum we enforce on human signups,
+and we want the seed itself never to be subject to the registration
+gate. The Log in tab surfaces the credentials inline whenever the
+gate is unset, so a tester doesn't have to read the README.
+
+Security boundary: production deployments that set the env var get
+**no seed**. That guarantees a real classroom can't accidentally ship
+with a publicly-known password — the same env var that protects
+against role-spoofing on the registration form also disables the
+convenience account. A maintainer who wants to remove the seed in a
+dev environment just deletes the `admin@solar-sim.local` row from
+`users` (and registers their own account, which will not be reseeded
+because the DB is no longer empty).
+
+Alternatives considered:
+
+- **Print credentials to stderr on first launch only.** Less visible
+  to non-technical testers and doesn't survive a `Ctrl+C`.
+- **Skip the seed; document register-an-instructor as the first
+  step.** Adds friction we just decided was not worth keeping.
+- **Seed unconditionally (ignore env var).** Defeats the gate's
+  purpose — a classroom could ship with a known-good login.
+
+Three tests in `app/test_phase3.py`:
+`test_default_admin_seeded_on_empty_db_when_env_unset`,
+`test_default_admin_not_seeded_when_env_set`,
+`test_default_admin_not_seeded_when_users_exist`. The first also
+verifies that the seeded password authenticates end-to-end.
+**Status: adopted.**

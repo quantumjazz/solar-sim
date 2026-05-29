@@ -190,6 +190,38 @@ def test_student_registration_ignores_instructor_token(db, monkeypatch):
     assert uid > 0
 
 
+def test_default_admin_seeded_on_empty_db_when_env_unset(db, monkeypatch):
+    """Fresh DB + no env var → ensure_default_admin creates the admin row."""
+    monkeypatch.delenv(auth.INSTRUCTOR_TOKEN_ENV, raising=False)
+    assert auth.ensure_default_admin(db) is True
+
+    row = db.get_user_by_email(auth.DEFAULT_ADMIN_EMAIL)
+    assert row is not None
+    assert row["display_name"] == auth.DEFAULT_ADMIN_NAME
+    assert row["role"] == "instructor"
+    # The default password authenticates against the seeded row.
+    authed = auth.authenticate(
+        db, auth.DEFAULT_ADMIN_EMAIL, auth.DEFAULT_ADMIN_PASSWORD
+    )
+    assert authed is not None and authed["id"] == row["id"]
+
+
+def test_default_admin_not_seeded_when_env_set(db, monkeypatch):
+    """Production lockdown (env var set) → seed is skipped, DB stays empty."""
+    monkeypatch.setenv(auth.INSTRUCTOR_TOKEN_ENV, "s3cret-classroom-token")
+    assert auth.ensure_default_admin(db) is False
+    assert db.get_user_by_email(auth.DEFAULT_ADMIN_EMAIL) is None
+
+
+def test_default_admin_not_seeded_when_users_exist(db, monkeypatch):
+    """An existing user (any role) suppresses the seed on subsequent calls."""
+    monkeypatch.delenv(auth.INSTRUCTOR_TOKEN_ENV, raising=False)
+    auth.register_user(db, "first@uni.edu", "First", "password1", "student")
+    # First call now sees an existing user → no seed.
+    assert auth.ensure_default_admin(db) is False
+    assert db.get_user_by_email(auth.DEFAULT_ADMIN_EMAIL) is None
+
+
 # ---------------------------------------------------------------------------
 # service.py — cohort setup
 # ---------------------------------------------------------------------------

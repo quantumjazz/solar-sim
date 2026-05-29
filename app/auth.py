@@ -40,10 +40,49 @@ INSTRUCTOR_TOKEN_ENV = "SOLAR_SIM_INSTRUCTOR_TOKEN"
 
 ROLES = ("instructor", "student")
 
+#: Dev-mode seeded instructor account, created on a fresh database when the
+#: instructor-registration gate is *not* in force. Lets a fresh clone be
+#: tested in 30 seconds without going through the registration form. The
+#: password is intentionally short ("tester") — that is why the seed
+#: bypasses `register_user` and writes the hash directly. In production
+#: (env var set), the seed is skipped entirely.
+DEFAULT_ADMIN_EMAIL = "admin@solar-sim.local"
+DEFAULT_ADMIN_NAME = "Admin"
+DEFAULT_ADMIN_PASSWORD = "tester"
+
 
 def instructor_token_required() -> bool:
     """True if the deployment has configured an instructor-registration token."""
     return bool(os.environ.get(INSTRUCTOR_TOKEN_ENV))
+
+
+def ensure_default_admin(db: Database) -> bool:
+    """Seed `admin@solar-sim.local` / `tester` if appropriate.
+
+    The seed is created only when both conditions hold:
+      1. The database has no users yet (fresh install).
+      2. `SOLAR_SIM_INSTRUCTOR_TOKEN` is unset (i.e., the deployment has
+         *not* opted into the locked-down classroom mode).
+
+    Setting the env var disables the seed entirely — that way a real
+    classroom deployment can't accidentally ship with a hardcoded
+    publicly-known password. Returns True iff a row was created.
+
+    Bypasses `register_user` on purpose: the seed password is shorter
+    than the minimum we enforce for human registrations, and we want the
+    seed itself never to be subject to the registration gate.
+    """
+    if instructor_token_required():
+        return False
+    if db.list_users():
+        return False
+    db.create_user(
+        DEFAULT_ADMIN_EMAIL,
+        DEFAULT_ADMIN_NAME,
+        hash_password(DEFAULT_ADMIN_PASSWORD),
+        "instructor",
+    )
+    return True
 
 
 class AuthError(Exception):

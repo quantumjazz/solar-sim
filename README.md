@@ -1,4 +1,4 @@
-# solar-sim (working title)
+# solar-sim
 
 A multi-team classroom **business simulation** for university management courses,
 set in the **solar PV and energy-storage** industry.
@@ -6,17 +6,17 @@ set in the **solar PV and energy-storage** industry.
 > **Status:** Engine, both front ends, the full pedagogy layer, and a
 > polished multi-user UX are working. Mechanics spec + scenario pack
 > (Phase 0), multi-team Python engine with full P&L / balance-sheet /
-> cash-flow articulation, successor products (Gen-2 panel, battery
-> storage, balcony solar) with R&D development and a coexistence handover,
-> a single-operator Streamlit instructor console, a multi-user app with
-> per-student logins (cookie-persistent across browser refreshes) over a
-> SQLite database, an auto-refreshing instructor submission dashboard, a
-> read-only view of each team's in-progress draft, and the four pedagogy
-> features: planning-quality scoring (sMAPE), balanced-scorecard
-> strategy-map authoring, per-teammate peer assessment, and a Markdown
-> board-meeting export.
-> 97 tests pass (35 engine + 62 app).
-> **Public name:** TBD. The directory name `solar-sim` is a placeholder.
+> cash-flow articulation (engine internals split into a per-phase
+> `rules/` subpackage for readability), successor products (Gen-2 panel,
+> battery storage, balcony solar) with R&D development and a
+> coexistence handover, a single-operator Streamlit instructor console,
+> a multi-user app with per-student logins (cookie-persistent across
+> browser refreshes) over a SQLite database, an auto-refreshing
+> instructor submission dashboard, a read-only view of each team's
+> in-progress draft, and the four pedagogy features: planning-quality
+> scoring (sMAPE), balanced-scorecard strategy-map authoring,
+> per-teammate peer assessment, and a Markdown board-meeting export.
+> 106 tests pass (36 engine + 70 app).
 
 ## Quick start
 
@@ -26,6 +26,30 @@ streamlit run app/app.py                         # multi-user app (logins + SQLi
 streamlit run app/instructor_console.py          # single-operator console
 cd sim-engine && PYTHONPATH=src python -m pytest # engine tests
 ```
+
+If `streamlit` isn't on your `$PATH` (e.g. it was installed under
+`~/Library/Python/3.x/bin/`), use `python3 -m streamlit run …` instead.
+
+### First run as a tester
+
+The multi-user app seeds a default instructor account on a fresh
+database, so a clone is testable in under a minute:
+
+- **Email:** `admin@solar-sim.local`
+- **Password:** `tester`
+
+The Log in tab surfaces these credentials inline. Pick a throwaway
+database with `SOLAR_SIM_DB=/tmp/solar-sim-test.db python3 -m streamlit
+run app/app.py` to keep your real cohort data clean.
+
+### Classroom / production mode
+
+Setting `SOLAR_SIM_INSTRUCTOR_TOKEN=<some-secret>` before launching
+locks down instructor signups: the registration form then requires
+the matching token whenever someone picks the "Instructor" role, and
+the default admin seed is **disabled** so a real deployment can't
+ship with the publicly-known `tester` password. Share the token with
+co-instructors over a secure channel.
 
 ## What this is
 

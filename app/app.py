@@ -60,8 +60,15 @@ st.set_page_config(page_title="solar-sim", layout="wide")
 
 @st.cache_resource
 def _get_db() -> Database:
-    """One Database for the whole process (its methods open per-call conns)."""
-    return Database(_DB_PATH)
+    """One Database for the whole process (its methods open per-call conns).
+
+    Side effect: on first construction, seeds the dev-mode default admin
+    account if the database is empty and the instructor-token gate is
+    not in force. See `auth.ensure_default_admin` for the policy.
+    """
+    db = Database(_DB_PATH)
+    auth.ensure_default_admin(db)
+    return db
 
 
 def _svc() -> GameService:
@@ -154,6 +161,16 @@ def _render_auth() -> None:
     tab_login, tab_register = st.tabs(["Log in", "Create an account"])
 
     with tab_login:
+        # Dev-mode convenience: when the registration gate isn't in force,
+        # surface the seeded default admin credentials so a fresh clone is
+        # testable without going through registration. Hidden in production
+        # mode (env var set) where no such account is seeded.
+        if not auth.instructor_token_required():
+            st.caption(
+                f"Default dev account: **{auth.DEFAULT_ADMIN_EMAIL}** / "
+                f"**{auth.DEFAULT_ADMIN_PASSWORD}** "
+                "(disabled when $SOLAR_SIM_INSTRUCTOR_TOKEN is set)."
+            )
         email = st.text_input("Email", key="login_email")
         password = st.text_input("Password", type="password", key="login_pw")
         if st.button("Log in", type="primary"):
