@@ -127,7 +127,10 @@ Multi-user app — same as before:
 - **No real-time student-side updates.** Only the instructor's
   submission dashboard polls.
 - **Draft concurrency** is last-write-wins.
-- **Open instructor role** at registration.
+- **Open instructor role at registration** — *partially closed.* The
+  deployment can now set `SOLAR_SIM_INSTRUCTOR_TOKEN` to gate instructor
+  signups behind a shared secret. Leaving it unset keeps registration
+  open (the historical default).
 
 Pedagogy layer — same as before; refinements listed in
 `docs/spec/09-pedagogy.md` §4.5 and §5.

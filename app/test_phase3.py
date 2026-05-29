@@ -142,6 +142,54 @@ def test_auth_rejects_weak_input(db):
         auth.register_user(db, "x@y.com", "X", "password1", "wizard")
 
 
+def test_instructor_registration_open_when_env_unset(db, monkeypatch):
+    """Default deployment (no env var set) leaves instructor registration open.
+
+    This is the historical behaviour. The token gate is opt-in: an
+    administrator sets `SOLAR_SIM_INSTRUCTOR_TOKEN` to lock it down.
+    """
+    monkeypatch.delenv(auth.INSTRUCTOR_TOKEN_ENV, raising=False)
+    assert not auth.instructor_token_required()
+    uid = auth.register_user(db, "open@uni.edu", "Prof", "password1", "instructor")
+    assert uid > 0
+
+
+def test_instructor_registration_requires_token_when_env_set(db, monkeypatch):
+    """With the env var set, instructor registration without a token is rejected."""
+    monkeypatch.setenv(auth.INSTRUCTOR_TOKEN_ENV, "s3cret-classroom-token")
+    assert auth.instructor_token_required()
+    with pytest.raises(auth.AuthError, match="Instructor registration requires"):
+        auth.register_user(db, "noToken@uni.edu", "Prof", "password1", "instructor")
+
+
+def test_instructor_registration_rejects_wrong_token(db, monkeypatch):
+    monkeypatch.setenv(auth.INSTRUCTOR_TOKEN_ENV, "s3cret-classroom-token")
+    with pytest.raises(auth.AuthError, match="Instructor registration requires"):
+        auth.register_user(
+            db, "wrong@uni.edu", "Prof", "password1", "instructor",
+            instructor_token="not-the-right-one",
+        )
+
+
+def test_instructor_registration_accepts_correct_token(db, monkeypatch):
+    monkeypatch.setenv(auth.INSTRUCTOR_TOKEN_ENV, "s3cret-classroom-token")
+    uid = auth.register_user(
+        db, "right@uni.edu", "Prof", "password1", "instructor",
+        instructor_token="  s3cret-classroom-token  ",  # whitespace-tolerant
+    )
+    assert uid > 0
+
+
+def test_student_registration_ignores_instructor_token(db, monkeypatch):
+    """The token gate applies only to role=instructor; students are unaffected."""
+    monkeypatch.setenv(auth.INSTRUCTOR_TOKEN_ENV, "s3cret-classroom-token")
+    uid = auth.register_user(
+        db, "stu@uni.edu", "Stu", "password1", "student",
+        instructor_token=None,  # explicit: students never present a token
+    )
+    assert uid > 0
+
+
 # ---------------------------------------------------------------------------
 # service.py — cohort setup
 # ---------------------------------------------------------------------------

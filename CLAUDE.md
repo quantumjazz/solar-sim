@@ -29,11 +29,17 @@ streamlit run app/app.py                 # multi-user app (logins + SQLite)
 streamlit run app/instructor_console.py  # single-operator console (no DB)
 ```
 
-As of 2026-05-25: 35 engine tests + 62 app tests, all passing. Runtime
+To gate instructor signups on the multi-user app, set
+`SOLAR_SIM_INSTRUCTOR_TOKEN=<some-secret>` before launching; the
+registration form then asks for the matching token whenever someone
+chooses the "Instructor" role. Leave unset to keep instructor
+registration open (the historical default).
+
+As of 2026-05-29: 36 engine tests + 67 app tests, all passing. Runtime
 dependencies: `pydantic` (v2), `pyyaml`, `streamlit`, and
 `extra-streamlit-components` (cookies for the multi-user app's
 persistent login). The multi-user app also uses `sqlite3`, `hashlib`,
-and `secrets` — all from the standard library. Test dependency:
+`secrets`, and `os` — all from the standard library. Test dependency:
 `pytest`. There is no build step.
 
 ## Architecture map
@@ -46,7 +52,9 @@ sim-engine/        pure-Python simulation engine — package `sim_engine`
   reports.py         output report models (incl. IndustryReport)
   context.py         applies period events → ResolvedPeriodContext
   validation.py      validate_decision / InvalidDecisionError
-  engine.py          run_period orchestrator + all rule modules
+  engine.py          run_period orchestrator + build_initial_state
+  rules/             per-phase rule modules: rnd, hr, production, sales,
+                       accounting, finance (called by the orchestrator)
 scenarios/solar-v1/  the scenario pack (scenario.yaml, period-events.yaml,
                      narrative/period-1..9.md)
 app/                 Streamlit front ends (depend on the engine)

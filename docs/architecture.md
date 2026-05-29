@@ -32,7 +32,14 @@ export) and keeps it testable without a UI.
 | `reports.py` | Output models: `ReportBundle` (per team) with `ExecutiveSummary`, `MarketReport`, `ProfitLossStatement`, `BalanceSheetReport`, `CashFlowStatement`, plus the cohort-public `IndustryReport`. |
 | `context.py` | `resolve_period_context()` — folds a period's events onto the base world to produce a `ResolvedPeriodContext` (effective wages, prices, market potentials, FX, offers, caps). |
 | `validation.py` | `validate_decision()` — rejects hard-invalid decisions; `InvalidDecisionError`. |
-| `engine.py` | `run_period()` orchestrator, `build_initial_state()`, and every rule sub-module (R&D, HR, production, sales settlement, accounting, articulation). |
+| `engine.py` | `run_period()` orchestrator, `build_initial_state()`, the per-company phase wrappers, and the report-bundle builders. Imports rule logic from `rules/`. |
+| `rules/_scratch.py` | The internal `_PeriodScratch` accumulator shared across rule modules within one `run_period` call. |
+| `rules/rnd.py` | `apply_rnd` — R&D index dynamics. |
+| `rules/hr.py` | `apply_hr` — workforce, productivity indices, auto-scaled cost centres. |
+| `rules/production.py` | `materialise_products`, `apply_notable_events`, `apply_line_changes`, `compute_available_capacity`, `apply_purchasing`, `apply_production`, `apply_inventory_post_production`, and the shared `line_depreciation_per_period` helper. |
+| `rules/sales.py` | `settle_market` (tender / bulk / retail channels with priority and inventory committal) plus `apply_sales_allocation_and_finished_inventory` (post-settlement COGS). |
+| `rules/accounting.py` | `apply_depreciation_and_overhead` — building/line/env-tech depreciation, overhead aggregation, environmental compliance penalty. |
+| `rules/finance.py` | `articulate` — P&L → balance sheet → cash flow with all identities enforced; plus the credit-rating composite, interest surcharge, and share-price proxy. |
 
 ## Public API
 

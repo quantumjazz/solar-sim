@@ -171,10 +171,30 @@ def _render_auth() -> None:
             "Password (at least 8 characters)", type="password", key="reg_pw"
         )
         role_label = st.selectbox("I am a…", ["Student", "Instructor"], key="reg_role")
+        # Only the deployment's administrator knows the instructor token, so
+        # surface the field only when a token is configured AND the user is
+        # asking for an instructor account. Students never see it.
+        token_required = (
+            role_label == "Instructor" and auth.instructor_token_required()
+        )
+        instructor_token = ""
+        if token_required:
+            instructor_token = st.text_input(
+                "Instructor registration token",
+                type="password",
+                key="reg_instr_token",
+                help=(
+                    "Set by the administrator via the "
+                    f"${auth.INSTRUCTOR_TOKEN_ENV} environment variable."
+                ),
+            )
         if st.button("Create account", type="primary"):
             role = "instructor" if role_label == "Instructor" else "student"
             try:
-                uid = auth.register_user(_get_db(), email, name, password, role)
+                uid = auth.register_user(
+                    _get_db(), email, name, password, role,
+                    instructor_token=instructor_token or None,
+                )
             except auth.AuthError as exc:
                 st.error(str(exc))
             else:
@@ -394,7 +414,8 @@ def _render_draft_summary(decision) -> None:
         st.caption("HR & finance")
         st.dataframe(
             [
-                {"Item": "Workforce Δ", "Value": decision.hr.production_workforce_change},
+                {"Item": "Workforce Δ",
+                 "Value": f"{decision.hr.production_workforce_change:+d}"},
                 {"Item": "Training / employee",
                  "Value": f"€{decision.hr.training_per_employee:,.0f}"},
                 {"Item": "Process-opt spend",

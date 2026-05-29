@@ -15,6 +15,7 @@ human-readable message.
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -32,7 +33,17 @@ SESSION_DURATION = timedelta(days=7)
 #: Cookie name carrying the session token in the browser.
 SESSION_COOKIE = "solar_sim_session"
 
+#: Environment variable that, when set non-empty, gates instructor
+#: registration: a new instructor account must present the matching token.
+#: Unset (the default) → registration is open, as before.
+INSTRUCTOR_TOKEN_ENV = "SOLAR_SIM_INSTRUCTOR_TOKEN"
+
 ROLES = ("instructor", "student")
+
+
+def instructor_token_required() -> bool:
+    """True if the deployment has configured an instructor-registration token."""
+    return bool(os.environ.get(INSTRUCTOR_TOKEN_ENV))
 
 
 class AuthError(Exception):
@@ -85,11 +96,14 @@ def register_user(
     display_name: str,
     password: str,
     role: str,
+    instructor_token: Optional[str] = None,
 ) -> int:
     """Create a new account; return its user id.
 
-    Raises `AuthError` if the email is taken, the role is unknown, or a
-    field fails a basic sanity check.
+    Raises `AuthError` if the email is taken, the role is unknown, a
+    field fails a basic sanity check, or the deployment has configured
+    `SOLAR_SIM_INSTRUCTOR_TOKEN` and the caller asks for `role="instructor"`
+    without presenting the matching token.
     """
     email = _normalise_email(email)
     display_name = display_name.strip()
@@ -104,6 +118,18 @@ def register_user(
         )
     if role not in ROLES:
         raise AuthError(f"Unknown role {role!r}.")
+
+    if role == "instructor":
+        configured = os.environ.get(INSTRUCTOR_TOKEN_ENV) or ""
+        if configured:
+            supplied = (instructor_token or "").strip()
+            if not supplied or not secrets.compare_digest(supplied, configured):
+                raise AuthError(
+                    "Instructor registration requires a valid token. "
+                    "Ask the administrator for the current value of "
+                    f"${INSTRUCTOR_TOKEN_ENV}."
+                )
+
     if db.get_user_by_email(email) is not None:
         raise AuthError("An account with that email already exists.")
 

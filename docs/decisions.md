@@ -298,3 +298,42 @@ Engine test count goes 28 → 35; the articulation invariant still holds
 in every test, for solvent and bankrupt companies, with and without
 overtime, and after the rating-surcharge re-prices interest.
 **Status: adopted.**
+
+### 26. Gate instructor registration on an optional shared token
+
+Until now anyone hitting the registration form could pick "Instructor"
+from the role dropdown and immediately see every cohort's drafts,
+reports, and peer-review comments. A real classroom needs to stop a
+curious student from doing that.
+
+The fix is an opt-in environment variable:
+`SOLAR_SIM_INSTRUCTOR_TOKEN`. When the deployment sets it, instructor
+registration requires the matching token (constant-time compare,
+whitespace-tolerant); the registration form surfaces a token field only
+in that case, and only when the user is asking for an instructor
+account. Students never see it. When the variable is unset — the
+historical default — registration stays open, which keeps all existing
+tests green without modification.
+
+Alternatives considered:
+
+- **First-user-is-instructor + mandatory token after.** Tighter default
+  but breaks the existing test suite (many tests register a student
+  before any instructor) and adds a `count_users()` SQL call on every
+  registration. Skipped for the simpler opt-in model.
+- **CLI promotion script** (drop the role dropdown entirely, flip a row
+  via `python -m app.promote …`). Most secure but adds friction every
+  time a fresh classroom DB is created. Held in reserve for a future
+  hardening pass.
+
+Operational note: the token is a single shared secret, not per-user. It
+is fine for a small classroom run by one professor; not appropriate for
+a multi-tenant SaaS. Documented in `app/README.md` (launch command) and
+`docs/current-task.md` (partial-fix note replacing the prior open
+limitation). Tests added in `app/test_phase3.py`:
+`test_instructor_registration_open_when_env_unset`,
+`test_instructor_registration_requires_token_when_env_set`,
+`test_instructor_registration_rejects_wrong_token`,
+`test_instructor_registration_accepts_correct_token`,
+`test_student_registration_ignores_instructor_token`.
+**Status: adopted.**
