@@ -139,11 +139,28 @@ Code is MIT-licensed; documentation and scenario content are CC-BY-SA 4.0.
 ## Git & deployment
 
 - The git repository root is the **parent** of `solar-sim/`. Only the
-  `solar-sim/` subtree is tracked.
-- Commit only when explicitly asked. Never run `git push` — the maintainer
-  pushes to GitHub over SSH.
-- **No hosted deployment.** Both front ends run locally. The multi-user
-  app (`app/app.py`) keeps cohort state in a SQLite file (`solar-sim.db` at
-  the repo root, or `$SOLAR_SIM_DB`); students connect to the instructor's
-  machine over the local network. The console (`instructor_console.py`) has
-  no database and saves a game as a JSON file.
+  `solar-sim/` subtree is tracked, and the working tree often also
+  contains an untracked sibling `Business Sims/` folder.
+- **Publishing uses `git subtree`, not plain `git push`.** The GitHub
+  remote `git@github.com:quantumjazz/solar-sim.git` stores the
+  `solar-sim/` subdirectory rerooted at the repo root — its `main`
+  branch has files at `app/...`, `docs/...`, etc., with no
+  `solar-sim/` prefix. Plain `git push origin main` therefore fails:
+  the two histories share no common ancestor because the tree
+  layouts differ. The correct command is:
+  ```
+  git subtree push --prefix=solar-sim origin main
+  ```
+  Run from the repo root (the parent of `solar-sim/`). It re-extracts
+  the subtree, replays it on the local `publish` branch (already
+  configured to track `origin/main`), and pushes that. Commit only
+  when explicitly asked; ask before pushing too unless the user has
+  already signed off this session.
+- **Deployment recipe** lives at `docs/deployment.md` — Cloudflare
+  Tunnel → systemd → Streamlit on an Ubuntu laptop, with the unit
+  template at `deploy/solar-sim.service` and a between-pilot DB
+  reset at `scripts/reset-db.sh`. Both front ends still run locally;
+  the multi-user app (`app/app.py`) keeps cohort state in a SQLite
+  file (`solar-sim.db` at the repo root, or `$SOLAR_SIM_DB`). The
+  single-operator console (`instructor_console.py`) has no database
+  and saves a game as a JSON file.
