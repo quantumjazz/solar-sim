@@ -1,0 +1,36 @@
+[Unit]
+# Template systemd unit for the multi-user app. Copy to
+# /etc/systemd/system/solar-sim.service and edit the USER and the
+# WorkingDirectory paths to match your server. The port (8501) is
+# Streamlit's default; change it if it collides with another service.
+Description=solar-sim multi-user app (Streamlit)
+After=network.target
+
+[Service]
+Type=simple
+User=victor
+WorkingDirectory=/home/victor/apps/solar-sim
+EnvironmentFile=/home/victor/apps/solar-sim/.env.production
+Environment="PATH=/home/victor/apps/solar-sim/.venv/bin:/usr/bin"
+Environment="PYTHONPATH=/home/victor/apps/solar-sim/sim-engine/src:/home/victor/apps/solar-sim/app"
+
+# Streamlit flags:
+#   --server.address=127.0.0.1            bind to loopback; Cloudflare Tunnel reaches us
+#   --server.port=8501                    Streamlit default
+#   --server.headless=true                don't try to open a browser on the server
+#   --browser.gatherUsageStats=false      no telemetry
+#   --server.enableCORS=false             required when reached via Cloudflare Tunnel
+#   --server.enableXsrfProtection=false   ditto; the WS upgrade fails otherwise
+ExecStart=/home/victor/apps/solar-sim/.venv/bin/streamlit run app/app.py \
+    --server.address=127.0.0.1 \
+    --server.port=8501 \
+    --server.headless=true \
+    --browser.gatherUsageStats=false \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

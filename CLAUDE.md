@@ -44,12 +44,26 @@ way a hardcoded password can never accidentally ship live. Delete the
 row from the `users` table to remove the seed once you've created
 your own account.
 
-As of 2026-05-29: 36 engine tests + 67 app tests, all passing. Runtime
+As of 2026-05-31: 36 engine tests + 72 app tests pass; 1 PDF
+round-trip test is skipped unless the optional PDF stack is installed.
+
+Install: `pip install -r requirements.txt` (engine + app + tests in
+one file). On Ubuntu, weasyprint also needs
+`apt install libpango-1.0-0 libpangoft2-1.0-0`; on macOS,
+`brew install pango cairo libffi`. Deployment recipe (Cloudflare Tunnel
++ systemd + Streamlit) lives at `docs/deployment.md`, with the unit
+template at `deploy/solar-sim.service` and a pilot-reset helper at
+`scripts/reset-db.sh`. Runtime
 dependencies: `pydantic` (v2), `pyyaml`, `streamlit`, and
 `extra-streamlit-components` (cookies for the multi-user app's
-persistent login). The multi-user app also uses `sqlite3`, `hashlib`,
-`secrets`, and `os` — all from the standard library. Test dependency:
-`pytest`. There is no build step.
+persistent login). Optional runtime dependencies for the PDF download
+buttons (period briefing, board-meeting export): `markdown` and
+`weasyprint`; the app degrades to a disabled button + caption when
+they are not installed. WeasyPrint needs system libraries — on Ubuntu
+`apt install libpango-1.0-0 libpangoft2-1.0-0`, on macOS
+`brew install pango cairo libffi`. The multi-user app also uses
+`sqlite3`, `hashlib`, `secrets`, and `os` — all from the standard
+library. Test dependency: `pytest`. There is no build step.
 
 ## Architecture map
 
@@ -73,10 +87,17 @@ app/                 Streamlit front ends (depend on the engine)
   service.py           bridges the database to the engine
   pedagogy.py          planning-quality + StrategyMap + peer-rating models (pure)
   board_export.py      Markdown renderer for the board-meeting deliverable (pure)
+  pdf_export.py        Markdown -> PDF renderer (optional weasyprint dep)
   forms.py / views.py  decision-entry forms / report rendering (shared)
   instructor_console.py  single-operator console (no database)
 docs/                spec/ (incl. 09-pedagogy.md), sources.md, calibration.md,
-                     architecture.md, current-task.md, decisions.md, testing.md
+                     architecture.md, current-task.md, decisions.md, testing.md,
+                     deployment.md
+deploy/              solar-sim.service (systemd unit template)
+scripts/             reset-db.sh (between-pilot DB rotation)
+requirements.txt     pinned runtime + test deps
+.env.production.example  template for deploy-time secrets (gitignored
+                         when filled in)
 ```
 
 Public API: `load_scenario_pack`, `build_initial_state`, `run_period`,

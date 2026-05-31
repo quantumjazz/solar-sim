@@ -6,9 +6,10 @@ state, reports, planning quality, strategy map, and peer aggregates from
 SQLite and applying the viewer-role visibility rules before calling
 `render_document`. See `docs/spec/09-pedagogy.md` §4.
 
-No database, no Streamlit, no third-party dependency. Markdown is chosen
-for portability — it renders natively in Streamlit, downloads as a
-plain `.md`, and converts to PDF / DOCX via pandoc downstream.
+No database, no Streamlit, no third-party dependency. Markdown is the
+intermediate form — it renders natively in Streamlit for the in-app
+preview, and `app/pdf_export.py` converts it to a styled PDF for the
+download button.
 """
 
 from __future__ import annotations

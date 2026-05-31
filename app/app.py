@@ -37,6 +37,7 @@ import auth  # noqa: E402
 import forms  # noqa: E402
 import views  # noqa: E402
 from db import Database  # noqa: E402
+import pdf_export  # noqa: E402
 from service import GameService, ServiceError, form_context, load_narrative  # noqa: E402
 
 # The cohort database. Defaults to `solar-sim.db` at the repo root; set the
@@ -171,19 +172,30 @@ def _render_auth() -> None:
                 f"**{auth.DEFAULT_ADMIN_PASSWORD}** "
                 "(disabled when $SOLAR_SIM_INSTRUCTOR_TOKEN is set)."
             )
-        email = st.text_input("Email", key="login_email")
+        email = st.text_input(
+            "Username or email",
+            key="login_email",
+            help="Whatever you chose when registering.",
+        )
         password = st.text_input("Password", type="password", key="login_pw")
         if st.button("Log in", type="primary"):
             user = auth.authenticate(_get_db(), email, password)
             if user is None:
-                st.error("Incorrect email or password.")
+                st.error("Incorrect username/email or password.")
             else:
                 _login_with_cookie(user)
                 st.rerun()
 
     with tab_register:
         name = st.text_input("Display name", key="reg_name")
-        email = st.text_input("Email", key="reg_email")
+        email = st.text_input(
+            "Username or email",
+            key="reg_email",
+            help=(
+                "Pick a short username (e.g. `alice`) or use your email. "
+                "Whatever you enter is what you'll log in with."
+            ),
+        )
         password = st.text_input(
             "Password (at least 8 characters)", type="password", key="reg_pw"
         )
@@ -246,6 +258,13 @@ def _render_period_header(cohort, fc, expand_briefing: bool) -> None:
         if briefing:
             with st.expander("Period briefing", expanded=expand_briefing):
                 st.markdown(briefing)
+                _offer_pdf_download(
+                    briefing,
+                    filename=f"briefing-period-{fc.period}.pdf",
+                    title=f"Period {fc.period} briefing",
+                    label="Download briefing as PDF",
+                    key=f"briefing_pdf_{cohort['id']}_{fc.period}",
+                )
     for b in fc.bulk_buyers:
         st.info(
             f"Bulk buyer: up to {b.max_units_per_company:,} units of "
@@ -518,11 +537,45 @@ def _render_run_dashboard(cohort_id: int, upcoming: int) -> None:
             st.rerun()
 
 
+def _render_onboarding_panel(cohort) -> None:
+    """Copy-paste instructions the instructor can send to students."""
+    public_url = os.environ.get("SOLAR_SIM_PUBLIC_URL", "").strip()
+    url_line = public_url if public_url else "<paste your app URL here>"
+    with st.expander("Onboarding instructions for students", expanded=False):
+        st.caption(
+            "Share the message below with your students. They register "
+            "themselves, then appear in the 'Assign a student to a team' "
+            "list below — their screen updates automatically once you "
+            "assign them. "
+            + (
+                ""
+                if public_url
+                else "Set `$SOLAR_SIM_PUBLIC_URL` on the server to "
+                "pre-fill the URL here."
+            )
+        )
+        st.code(
+            f"""Hi! We're playing the solar-sim business simulation in class.
+
+1. Open: {url_line}
+2. Click "Create an account".
+3. Pick a short username (e.g. your first name) or use your email,
+   plus a password (8+ characters). Leave the role on "Student".
+4. After registering, you'll see a "waiting for assignment" screen.
+   Don't reload — once I add you to a team, the screen will switch
+   to your team's dashboard automatically.
+5. Cohort: {cohort['name']}""",
+            language="text",
+        )
+
+
 def _render_members(cohort) -> None:
     svc = _svc()
     db = _get_db()
     cohort_id = cohort["id"]
     teams = db.list_teams(cohort_id)
+
+    _render_onboarding_panel(cohort)
 
     st.markdown("#### Teams")
     for team in teams:
@@ -976,6 +1029,37 @@ def _safe_filename_piece(text: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "_" for c in text)
 
 
+def _offer_pdf_download(
+    md_text: str,
+    *,
+    filename: str,
+    title: str,
+    label: str,
+    key: str,
+    primary: bool = False,
+) -> None:
+    """Render a PDF download button, or a caption if PDF deps are missing."""
+    if not pdf_export.PDF_AVAILABLE:
+        st.caption(
+            "PDF download unavailable on this server "
+            "(install `markdown` and `weasyprint`)."
+        )
+        return
+    try:
+        pdf_bytes = pdf_export.markdown_to_pdf(md_text, title=title)
+    except Exception as exc:  # pragma: no cover - defensive
+        st.caption(f"PDF rendering failed: {exc}")
+        return
+    st.download_button(
+        label,
+        data=pdf_bytes,
+        file_name=filename,
+        mime="application/pdf",
+        type="primary" if primary else "secondary",
+        key=key,
+    )
+
+
 def _render_board_export(
     cohort, role: str, team_id: int = None, user_id: int = None
 ) -> None:
@@ -985,9 +1069,8 @@ def _render_board_export(
 
     st.markdown(
         "The capstone deliverable — every team's reports, planning quality, "
-        "strategy map and peer-assessment summary in one portable Markdown "
-        "document. Download the file or use `pandoc` to convert to PDF or "
-        "DOCX downstream."
+        "strategy map and peer-assessment summary in one portable PDF "
+        "document, with a preview below."
     )
 
     if role == "instructor":
@@ -1018,15 +1101,15 @@ def _render_board_export(
 
     filename = (
         f"board-meeting-{_safe_filename_piece(cohort['name'])}-"
-        f"{_safe_filename_piece(target['name'])}-{date.today().isoformat()}.md"
+        f"{_safe_filename_piece(target['name'])}-{date.today().isoformat()}.pdf"
     )
-    st.download_button(
-        "Download as Markdown",
-        data=document,
-        file_name=filename,
-        mime="text/markdown",
-        type="primary",
+    _offer_pdf_download(
+        document,
+        filename=filename,
+        title=f"Board meeting — {target['name']}",
+        label="Download as PDF",
         key=f"be_download_{cohort_id}_{target['id']}",
+        primary=True,
     )
 
     with st.expander("Preview document", expanded=False):
@@ -1038,16 +1121,30 @@ def _render_board_export(
 # ---------------------------------------------------------------------------
 
 
+@st.fragment(run_every=3)
+def _render_waiting_for_assignment(user: dict) -> None:
+    """Polls the cohort assignment so the student doesn't have to reload."""
+    db = _get_db()
+    if db.list_cohorts_for_user(user["id"]):
+        # Just got assigned — rerun the whole app so the team view appears.
+        st.rerun(scope="app")
+    st.info(
+        "You're registered as **"
+        f"{user['display_name']}** ("
+        f"`{user['email']}`). Your instructor needs to add you to a "
+        "team — give them your username if they're nearby, otherwise "
+        "wait a moment. This screen updates automatically when you're "
+        "assigned, no need to reload."
+    )
+
+
 def _render_student(user: dict) -> None:
     db = _get_db()
     st.header("My team")
 
     cohorts = db.list_cohorts_for_user(user["id"])
     if not cohorts:
-        st.info(
-            "You have not been assigned to a team yet. Ask your instructor "
-            "to add you to a cohort, then reload this page."
-        )
+        _render_waiting_for_assignment(user)
         return
 
     cohort_id = st.selectbox(

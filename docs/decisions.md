@@ -384,3 +384,93 @@ Three tests in `app/test_phase3.py`:
 `test_default_admin_not_seeded_when_users_exist`. The first also
 verifies that the seeded password authenticates end-to-end.
 **Status: adopted.**
+
+---
+
+### 28. Pilot-readiness onboarding: usernames, auto-refresh, instructor panel
+
+Three quality-of-life changes for the first classroom pilot, none of
+which alter the engine:
+
+1. **Username login.** `auth.register_user` no longer enforces an
+   email-shaped identifier. Anything 3+ characters with no whitespace
+   and no commas is accepted and stored in the existing `email`
+   column. Lookup is case-insensitive (already true). The UI labels
+   were updated to "Username or email" in both forms. Rationale: a
+   classroom pilot is not a high-security context, and asking
+   students to type their institution email at every login is the
+   single biggest friction point in onboarding. Email addresses still
+   work; the field is just more permissive.
+2. **Auto-refresh on the "waiting for assignment" screen.** A
+   `@st.fragment(run_every=3)` polls `list_cohorts_for_user`; the
+   moment the instructor assigns the student to a team, the fragment
+   calls `st.rerun(scope="app")` and the team view appears without a
+   manual reload.
+3. **Onboarding-instructions panel** for the instructor on the
+   Teams & members tab, with a copy-paste student message (URL,
+   step-by-step, cohort name). The app URL is pre-filled from
+   `$SOLAR_SIM_PUBLIC_URL` when set.
+
+Alternatives considered:
+
+- **Per-cohort join codes** (students enter a code at registration
+  and join the cohort's unassigned pool automatically). Strictly
+  better UX, but a meaningful schema and flow change; deferred until
+  after the first pilot informs whether it's worth the work.
+- **Magic-link email invitations.** Adds SMTP configuration and a
+  whole class of failure modes (deliverability, spam, password
+  recovery) for negligible pilot benefit.
+
+New tests: `test_auth_accepts_username_identifier` plus an updated
+`test_auth_rejects_weak_input`. The waiting-screen fragment is
+exercised indirectly by the existing
+`test_app_register_student_lands_on_student_view`. **Status: adopted.**
+
+---
+
+### 29. Deployment recipe: Cloudflare Tunnel → Streamlit on Ubuntu
+
+The first hosted deployment of solar-sim lands as five committed
+artifacts plus a guide:
+
+- `requirements.txt` — single source of truth for runtime + test
+  deps (was previously documented prose in CLAUDE.md / README).
+- `deploy/solar-sim.service` — systemd unit template, with the
+  Streamlit-specific flags (`--server.enableCORS=false`,
+  `--server.enableXsrfProtection=false`) needed when reached over a
+  Cloudflare Tunnel.
+- `.env.production.example` — template for the three deploy-time env
+  vars (`SOLAR_SIM_DB`, `SOLAR_SIM_INSTRUCTOR_TOKEN`,
+  `SOLAR_SIM_PUBLIC_URL`); the filled-in `.env.production` is
+  gitignored.
+- `scripts/reset-db.sh` — between-pilot helper that stops the
+  service, dates the current DB to a `.bak` and starts fresh.
+- `docs/deployment.md` — end-to-end walk-through.
+
+Choices made:
+
+- **Cloudflare Tunnel direct to the app port**, no Caddy in the
+  loop. Matches the actual `uni_dashboard` production setup
+  (`ubuntu-server-setup-guide.txt` §7), one fewer moving part.
+- **Streamlit's default port 8501**, not a sequential 8001/8002.
+  Anyone debugging recognises 8501 as Streamlit's default.
+- **Separate `deploy/solar-sim.service` template** rather than
+  inline-in-docs. The unit has enough Streamlit-specific flags that
+  a versioned file is less error-prone to copy than rendered
+  Markdown.
+- **Same DEPLOYMENT pattern as `uni_dashboard`**: `~/apps/<name>/`,
+  systemd-managed venv, env file at project root with `chmod 600`,
+  `git pull && pip install -r requirements.txt && systemctl restart`
+  as the update loop.
+
+Alternatives considered:
+
+- **Docker image.** Tempting but a heavier first deployment; the
+  `pip + systemd` pattern is already in flight for `uni_dashboard`
+  on the same laptop.
+- **A managed host (Streamlit Community Cloud, Render).** Would
+  remove the laptop dependency but loses local SQLite portability
+  and adds an outside party to the data path — both bad for a
+  classroom pilot.
+
+**Status: adopted.**

@@ -250,16 +250,18 @@ fetches the rows.
 ## 4. Board-meeting export
 
 The capstone deliverable. A team's work over the cohort is packaged into
-a single portable **Markdown** document, downloadable from the app and
-suitable for sharing, printing, or converting to PDF / DOCX via pandoc.
+a single styled **PDF** document, downloadable from the app, with an
+in-app Markdown preview alongside it.
 
-### 4.1 Why Markdown
+### 4.1 Why Markdown → PDF
 
-Markdown carries the project's no-third-party-dependency stance:
-generation is a pure string-build, it renders natively as a Streamlit
-preview, and downstream conversion to PDF or DOCX is one `pandoc` (or
-text-editor paste) away. A native PDF / DOCX exporter is a possible
-future refinement.
+Document generation is a pure Markdown string-build so it can be
+preview-rendered directly in Streamlit, snapshot-tested, and reused
+elsewhere without a PDF stack. `app/pdf_export.py` then converts the
+same Markdown to a styled PDF via `markdown` + `weasyprint`. The PDF
+button gracefully degrades to a "PDF unavailable on this server"
+caption when those packages are not installed, keeping the rest of the
+app runnable without the PDF system libraries (Cairo, Pango).
 
 ### 4.2 Document structure
 
@@ -294,15 +296,18 @@ assessment section is filtered accordingly:
 A pure renderer in `app/board_export.py` takes a data bundle and returns
 the Markdown string. `app/service.py` orchestrates the fetch from SQLite
 and the viewer-role visibility filtering. The Streamlit tab in
-`app/app.py` calls the service, renders the document as a preview, and
-offers an `st.download_button` save-as-Markdown.
+`app/app.py` calls the service, renders the document as an in-app
+Markdown preview, and offers an `st.download_button` that serves the
+PDF produced by `app/pdf_export.py`.
 
 ### 4.5 Deliberately out of scope (first pass)
 
-- **PDF / DOCX export.** A future refinement; would add a library
-  dependency.
-- **Custom templates.** The document structure is fixed; per-course
-  template customisation is a later concern.
+- **DOCX export.** A future refinement; the Markdown is the
+  intermediate form so a downstream `pandoc` pipeline can produce
+  DOCX if needed.
+- **Custom templates.** The document structure and the PDF stylesheet
+  in `pdf_export.py` are fixed; per-course template customisation is a
+  later concern.
 - **Multi-team consolidated reports.** The export is per team; an
   instructor wanting a cohort-wide deliverable currently exports each
   team's document and combines manually.

@@ -1,0 +1,20 @@
+# Runtime dependencies for solar-sim.
+#
+# Engine: pure Python with two model deps.
+pydantic>=2,<3
+pyyaml>=6
+
+# Multi-user app: Streamlit + cookie-backed sessions.
+streamlit>=1.37
+extra-streamlit-components>=0.1.71
+
+# PDF download buttons (period briefing, board-meeting export).
+# weasyprint also needs system libraries — see docs/deployment.md:
+#   Ubuntu:  apt install libpango-1.0-0 libpangoft2-1.0-0
+#   macOS:   brew install pango cairo libffi
+markdown>=3.5
+weasyprint>=60
+
+# Test-only — pinned loose; install with `pip install -r requirements.txt pytest`
+# or in a separate dev requirements file if you prefer.
+pytest>=8

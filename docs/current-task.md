@@ -83,7 +83,19 @@ mostly inert indices and scenario calibration:
 
 - **Pedagogy refinements.** Sharing peer comments to ratees anonymised,
   per-period peer ratings, weighted KPIs, strategy-map version history,
-  multi-team consolidated board reports, native PDF / DOCX export.
+  multi-team consolidated board reports, native DOCX export. (Native
+  PDF export shipped 2026-05-31 — see `app/pdf_export.py`; powers the
+  period-briefing and board-meeting download buttons.)
+- **Pilot-onboarding polish (2026-05-31):** the `email` column now
+  accepts a plain username (no `@` required); the student "waiting
+  for assignment" screen auto-refreshes via a fragment; the Teams &
+  members tab has an "Onboarding instructions for students" expander
+  with copy-paste setup steps. See `decisions.md` #28.
+- **Deployment artifacts (2026-05-31):** `requirements.txt`,
+  `deploy/solar-sim.service`, `.env.production.example`,
+  `scripts/reset-db.sh`, and `docs/deployment.md` ship the
+  Cloudflare Tunnel + systemd + Streamlit recipe. See
+  `decisions.md` #29.
 - **Engine indices and calibration.** Re-enable `image_index` /
   `satisfaction_index` dynamics (currently inert); use the now-dynamic
   rating in the share-price drivers; pilot-calibrate the rating

@@ -126,7 +126,18 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def _normalise_email(email: str) -> str:
+    """Identifier normaliser; despite the name the column accepts a username
+    or an email address. Lowercased and stripped of surrounding whitespace."""
     return email.strip().lower()
+
+
+def _is_valid_identifier(identifier: str) -> bool:
+    """A username/email identifier: 3+ chars, no whitespace, no commas."""
+    if len(identifier) < 3:
+        return False
+    if any(c.isspace() for c in identifier):
+        return False
+    return "," not in identifier
 
 
 def register_user(
@@ -139,16 +150,20 @@ def register_user(
 ) -> int:
     """Create a new account; return its user id.
 
-    Raises `AuthError` if the email is taken, the role is unknown, a
+    Raises `AuthError` if the identifier is taken, the role is unknown, a
     field fails a basic sanity check, or the deployment has configured
     `SOLAR_SIM_INSTRUCTOR_TOKEN` and the caller asks for `role="instructor"`
-    without presenting the matching token.
+    without presenting the matching token. The identifier may be a
+    username or an email address — both are accepted, stored in the same
+    column, and looked up case-insensitively.
     """
     email = _normalise_email(email)
     display_name = display_name.strip()
 
-    if "@" not in email or "." not in email.split("@")[-1]:
-        raise AuthError("Enter a valid email address.")
+    if not _is_valid_identifier(email):
+        raise AuthError(
+            "Username must be at least 3 characters with no spaces."
+        )
     if not display_name:
         raise AuthError("Enter a display name.")
     if len(password) < _MIN_PASSWORD_LEN:
@@ -170,13 +185,13 @@ def register_user(
                 )
 
     if db.get_user_by_email(email) is not None:
-        raise AuthError("An account with that email already exists.")
+        raise AuthError("That username or email is already taken.")
 
     try:
         return db.create_user(email, display_name, hash_password(password), role)
     except sqlite3.IntegrityError:
         # A concurrent registration won the unique-email race.
-        raise AuthError("An account with that email already exists.")
+        raise AuthError("That username or email is already taken.")
 
 
 def authenticate(

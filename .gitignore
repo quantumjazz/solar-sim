@@ -26,3 +26,8 @@ env/
 *.db
 *.db-wal
 *.db-shm
+
+# Deployment secrets — only the .example template is committed
+.env
+.env.production
+.env.local

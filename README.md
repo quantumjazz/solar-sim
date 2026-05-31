@@ -15,8 +15,12 @@ set in the **solar PV and energy-storage** industry.
 > instructor submission dashboard, a read-only view of each team's
 > in-progress draft, and the four pedagogy features: planning-quality
 > scoring (sMAPE), balanced-scorecard strategy-map authoring,
-> per-teammate peer assessment, and a Markdown board-meeting export.
-> 106 tests pass (36 engine + 70 app).
+> per-teammate peer assessment, and a styled-PDF board-meeting export
+> (with the same renderer driving a PDF download for each period
+> briefing). Username-or-email login, auto-refreshing student waiting
+> screen, and an instructor-side onboarding-instructions panel.
+> 108 tests pass (36 engine + 72 app), with 1 PDF round-trip test
+> skipped unless `weasyprint` is installed.
 
 ## Quick start
 
@@ -114,7 +118,8 @@ solar-sim/
     ├── app.py                      multi-user app (logins, SQLite-backed)
     ├── db.py / auth.py / service.py  the database, accounts, engine bridge
     ├── pedagogy.py                  planning-quality + strategy + peer models
-    ├── board_export.py              Markdown board-meeting document renderer
+    ├── board_export.py              board-meeting document renderer (Markdown)
+    ├── pdf_export.py                Markdown -> PDF (weasyprint, optional)
     ├── forms.py / views.py          decision forms and report rendering
     └── instructor_console.py        single-operator console (no database)
 ```

@@ -136,10 +136,25 @@ def test_auth_rejects_duplicate_email(db):
 def test_auth_rejects_weak_input(db):
     with pytest.raises(auth.AuthError):
         auth.register_user(db, "x@y.com", "X", "short", "student")
+    # Identifier rules: < 3 chars or contains whitespace is rejected.
     with pytest.raises(auth.AuthError):
-        auth.register_user(db, "not-an-email", "X", "password1", "student")
+        auth.register_user(db, "ab", "X", "password1", "student")
+    with pytest.raises(auth.AuthError):
+        auth.register_user(db, "user name", "X", "password1", "student")
     with pytest.raises(auth.AuthError):
         auth.register_user(db, "x@y.com", "X", "password1", "wizard")
+
+
+def test_auth_accepts_username_identifier(db):
+    """Identifiers don't have to look like email — usernames work too."""
+    uid = auth.register_user(db, "alice", "Alice", "password1", "student")
+    assert uid > 0
+    # And the same identifier logs back in.
+    user = auth.authenticate(db, "alice", "password1")
+    assert user is not None
+    assert user["id"] == uid
+    # Case-insensitive (stored lowercased).
+    assert auth.authenticate(db, "ALICE", "password1") is not None
 
 
 def test_instructor_registration_open_when_env_unset(db, monkeypatch):
@@ -397,7 +412,9 @@ def test_app_register_student_lands_on_student_view():
     at = _register(_fresh_app(), "Stu A", "studa@uni.edu", "Student")
     assert not at.exception, at.exception
     assert any("My team" in h.value for h in at.header)
-    assert any("not been assigned" in i.value for i in at.info)
+    assert any(
+        "instructor needs to add you" in i.value for i in at.info
+    )
 
 
 def test_app_instructor_creates_cohort():
@@ -927,6 +944,31 @@ def test_app_aggregated_rating_visible_only_after_close():
 # ---------------------------------------------------------------------------
 # board_export.py — Markdown renderer (pure)
 # ---------------------------------------------------------------------------
+
+
+def test_pdf_export_round_trips_markdown_to_pdf_bytes():
+    pytest.importorskip("weasyprint")
+    pytest.importorskip("markdown")
+    from pdf_export import markdown_to_pdf
+
+    md = (
+        "# Title\n\n"
+        "Some **bold** text and a [link](https://example.com).\n\n"
+        "| A | B |\n| - | - |\n| 1 | 2 |\n"
+    )
+    out = markdown_to_pdf(md, title="Test")
+    assert isinstance(out, bytes)
+    assert out.startswith(b"%PDF-")
+    assert len(out) > 500  # a real document, not an empty stub
+
+
+def test_pdf_export_module_flags_when_deps_missing(monkeypatch):
+    import pdf_export
+
+    monkeypatch.setattr(pdf_export, "PDF_AVAILABLE", False)
+    monkeypatch.setattr(pdf_export, "IMPORT_ERROR", "ImportError: simulated")
+    with pytest.raises(RuntimeError, match="simulated"):
+        pdf_export.markdown_to_pdf("hello")
 
 
 def _minimal_board_data(**overrides):
