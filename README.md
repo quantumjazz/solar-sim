@@ -1,5 +1,7 @@
 # solar-sim
 
+link to the app: https://solar-sim.visiometrica.com/
+
 A multi-team classroom **business simulation** for university management courses,
 set in the **solar PV and energy-storage** industry.
 
